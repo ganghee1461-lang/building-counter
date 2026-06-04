@@ -12,17 +12,15 @@
 </head>
 <body>
   <div class="app">
-    <!-- 좌측: 지도 -->
     <main class="map-wrap">
       <div id="map"></div>
 
-      <!-- 상단 컨트롤 바 -->
       <div class="topbar">
         <div class="brand">
           <span class="brand-mark">BC</span>
           <div>
             <div class="brand-name">건축물 세대수 집계기</div>
-            <div class="brand-sub">BLDG-COUNTER · v1.0</div>
+            <div class="brand-sub">BLDG-COUNTER · v2.0</div>
           </div>
         </div>
         <div class="search-box">
@@ -31,7 +29,6 @@
         </div>
       </div>
 
-      <!-- 좌측 하단 도움말 -->
       <div class="legend">
         <div class="legend-title">조작 방법</div>
         <div class="legend-row"><kbd>SHIFT</kbd> + 드래그 <span>영역 선택</span></div>
@@ -42,7 +39,6 @@
         </div>
       </div>
 
-      <!-- 우측 하단 상태 -->
       <div class="status-bar">
         <div id="statusMsg">준비</div>
         <div id="loadIndicator" class="load-indicator" hidden>
@@ -51,32 +47,42 @@
       </div>
     </main>
 
-    <!-- 우측: 결과 패널 -->
     <aside class="panel">
       <div class="summary">
         <div class="summary-title">합계</div>
-        <div class="summary-stats">
-          <div class="stat">
-            <div class="stat-label">선택 건물</div>
-            <div class="stat-value" id="sumCount">0</div>
-            <div class="stat-unit">동</div>
+
+        <!-- 계량기 총합 -->
+        <div class="meter-total">
+          <div class="meter-total-label">계량기 합계</div>
+          <div class="meter-total-value"><span id="sumHhld">0</span><span class="meter-unit">개</span></div>
+        </div>
+
+        <!-- 용도별 소계 -->
+        <div class="meter-breakdown">
+          <div class="breakdown-row" id="row-apartment">
+            <span class="type-badge" style="background:#1a3a6e;color:#7ab4ff">공동주택</span>
+            <span id="sumApartment">0</span>
+            <span class="bd-unit">세대</span>
           </div>
-          <div class="stat highlight">
-            <div class="stat-label">세대수</div>
-            <div class="stat-value" id="sumHhld">0</div>
-            <div class="stat-unit">세대</div>
+          <div class="breakdown-row" id="row-single">
+            <span class="type-badge" style="background:#1a4a2e;color:#6ddb97">단독주택</span>
+            <span id="sumSingle">0</span>
+            <span class="bd-unit">가구</span>
           </div>
-          <div class="stat">
-            <div class="stat-label">호수</div>
-            <div class="stat-value" id="sumHo">0</div>
-            <div class="stat-unit">호</div>
+          <div class="breakdown-row" id="row-oneroom">
+            <span class="type-badge" style="background:#3a2a6e;color:#b47aff">원룸</span>
+            <span id="sumOneroom">0</span>
+            <span class="bd-unit">세대</span>
           </div>
-          <div class="stat">
-            <div class="stat-label">가구수</div>
-            <div class="stat-value" id="sumFmly">0</div>
-            <div class="stat-unit">가구</div>
+          <div class="breakdown-row" id="row-commercial">
+            <span class="type-badge" style="background:#4a2a1a;color:#ffaa4a">일반용</span>
+            <span id="sumCommercial">0</span>
+            <span class="bd-unit">호</span>
           </div>
         </div>
+
+        <div class="summary-sub">선택 건물 <strong id="sumCount">0</strong>동</div>
+
         <div class="actions">
           <button id="clearBtn" class="btn-secondary">전체 해제</button>
           <button id="exportBtn" class="btn-primary">CSV 내보내기</button>
@@ -98,7 +104,6 @@
     </aside>
   </div>
 
-  <!-- 토스트 -->
   <div id="toast" class="toast"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/ol@v8.2.0/dist/ol.js"></script>
