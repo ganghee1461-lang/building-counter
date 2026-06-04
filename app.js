@@ -1,8 +1,7 @@
 /* ============================================
-   건축물 세대수 집계기 v2
-   - 계량기 수 자동 계산
-   - 공동주택 / 단독주택 / 원룸 / 일반용 구분
-   - 혼합건물 용도별 분리 표시
+   건축물 세대수 집계기 v3
+   - PNU 기준 중복 제거
+   - 전체 0이면 일반용 1호 처리
 ============================================ */
 
 const CONFIG = {
@@ -14,7 +13,7 @@ const CONFIG = {
 };
 
 const state = {
-  selectedFeatures: new Map(),
+  selectedFeatures: new Map(), // key: PNU
   loading: new Set(),
 };
 
@@ -36,7 +35,10 @@ const selectedStyle = new ol.style.Style({ fill: new ol.style.Fill({ color: 'rgb
 
 const buildingLayer = new ol.layer.Vector({
   source: buildingSource,
-  style: (f) => state.selectedFeatures.has(getFeatureId(f)) ? selectedStyle : defaultStyle,
+  style: (f) => {
+    const pnu = f.get('pnu');
+    return state.selectedFeatures.has(pnu) ? selectedStyle : defaultStyle;
+  },
 });
 
 const map = new ol.Map({
@@ -52,9 +54,9 @@ const map = new ol.Map({
 window.map = map;
 
 // ===== 유틸 =====
-function getFeatureId(f) {
-  return f.get('pk') || f.get('bd_mgt_sn') || f.get('pnu') || f.getId() ||
-         JSON.stringify(f.getGeometry().getExtent());
+// PNU를 선택 기준 키로 사용 (중복 방지)
+function getSelectionKey(f) {
+  return f.get('pnu') || f.get('pk') || f.getId();
 }
 
 function getBuildingName(f) {
@@ -80,8 +82,7 @@ function parsePnu(pnu) {
   };
 }
 
-// ===== 계량기 수 계산 (핵심 로직) =====
-// 용도코드(mainPurpsCd) 기반으로 분류 + 계량기 수 결정
+// ===== 계량기 수 계산 =====
 function calcMeters(item) {
   const cd   = String(item.mainPurpsCd || '').padStart(5, '0');
   const nm   = String(item.mainPurpsCdNm || '');
@@ -89,27 +90,23 @@ function calcMeters(item) {
   const ho   = parseInt(item.hoCnt    || 0, 10);
   const fmly = parseInt(item.fmlyCnt  || 0, 10);
 
-  // ── 단독주택 (다가구 아닌 순수 단독)
+  // 단독주택
   if (['01000','01001','01002'].includes(cd)) {
-    return { type: 'single', label: '단독주택', meters: fmly > 0 ? fmly : 1 };
+    return { type: 'single', label: '단독주택', meters: fmly > 0 ? fmly : hhld > 0 ? hhld : 0 };
   }
-
-  // ── 원룸계열: 다가구(01003), 다세대(02003), 기숙사(02004)
-  //    + 용도명에 고시원/다중생활/기숙사/노인복지 포함
+  // 원룸 계열
   const isOneroom = ['01003','02003','02004'].includes(cd) ||
     ['고시원','다중생활','기숙사','노인복지','노인요양'].some(k => nm.includes(k));
   if (isOneroom) {
     const cnt = fmly > 0 ? fmly : hhld > 0 ? hhld : ho;
-    return { type: 'oneroom', label: '원룸', meters: cnt > 0 ? cnt : 1 };
+    return { type: 'oneroom', label: '원룸', meters: cnt };
   }
-
-  // ── 공동주택: 아파트(02001), 연립(02002), 일반공동(02000)
+  // 공동주택
   if (['02000','02001','02002'].includes(cd)) {
     return { type: 'apartment', label: '공동주택', meters: hhld > 0 ? hhld : ho };
   }
-
-  // ── 나머지 (근린생활시설, 판매, 업무 등) = 일반용
-  return { type: 'commercial', label: '일반용', meters: ho > 0 ? ho : 1 };
+  // 일반용
+  return { type: 'commercial', label: '일반용', meters: ho };
 }
 
 // ===== 건축HUB API 조회 =====
@@ -148,9 +145,8 @@ function extractItems(data) {
   return Array.isArray(item) ? item : [item];
 }
 
-// 항목별 계량기 집계 → 용도별 breakdown 생성
 function buildResult(items, feature) {
-  // 용도별로 그룹핑
+  // 용도별 그룹핑
   const groups = {};
   for (const it of items) {
     const { type, label, meters } = calcMeters(it);
@@ -158,10 +154,15 @@ function buildResult(items, feature) {
     groups[type].meters += meters;
   }
 
-  const breakdown = Object.values(groups);
-  const totalMeters = breakdown.reduce((s, g) => s + g.meters, 0);
+  let breakdown = Object.values(groups);
+  let totalMeters = breakdown.reduce((s, g) => s + g.meters, 0);
 
-  // 대표 이름/주소
+  // ★ 전체 0이면 일반용 1호로 처리
+  if (totalMeters === 0) {
+    breakdown = [{ type: 'commercial', label: '일반용', meters: 1 }];
+    totalMeters = 1;
+  }
+
   const names  = [...new Set(items.map(it => it.bldNm).filter(Boolean))];
   const addrs  = [...new Set(items.map(it => it.newPlatPlc || it.platPlc).filter(Boolean))];
 
@@ -169,22 +170,23 @@ function buildResult(items, feature) {
     name:        names.join(', ') || getBuildingName(feature),
     address:     addrs[0]         || getBuildingAddress(feature),
     totalMeters,
-    breakdown,   // [{ type, label, meters }, ...]
-    // 하위 호환
+    breakdown,
     hhld: items.reduce((s, it) => s + parseInt(it.hhldCnt || 0, 10), 0),
     ho:   items.reduce((s, it) => s + parseInt(it.hoCnt   || 0, 10), 0),
     fmly: items.reduce((s, it) => s + parseInt(it.fmlyCnt || 0, 10), 0),
   };
 }
 
-// ===== 선택 처리 =====
+// ===== 선택 처리 (PNU 기준 중복 방지) =====
 function toggleSelection(f) {
-  const id = getFeatureId(f);
-  if (state.selectedFeatures.has(id)) {
-    state.selectedFeatures.delete(id);
+  const key = getSelectionKey(f);
+  if (!key) return;
+
+  if (state.selectedFeatures.has(key)) {
+    state.selectedFeatures.delete(key);
   } else {
-    state.selectedFeatures.set(id, { feature: f, info: null });
-    queueLookup(id, f);
+    state.selectedFeatures.set(key, { feature: f, info: null });
+    queueLookup(key, f);
   }
   buildingLayer.changed();
   renderList();
@@ -192,16 +194,18 @@ function toggleSelection(f) {
 }
 
 function selectMany(features) {
+  let added = 0;
   for (const f of features) {
-    const id = getFeatureId(f);
-    if (!state.selectedFeatures.has(id)) {
-      state.selectedFeatures.set(id, { feature: f, info: null });
-      queueLookup(id, f);
-    }
+    const key = getSelectionKey(f);
+    if (!key || state.selectedFeatures.has(key)) continue; // PNU 중복 스킵
+    state.selectedFeatures.set(key, { feature: f, info: null });
+    queueLookup(key, f);
+    added++;
   }
   buildingLayer.changed();
   renderList();
   updateSummary();
+  return added;
 }
 
 function clearSelection() {
@@ -212,32 +216,35 @@ function clearSelection() {
 }
 
 function rerenderSelections() {
-  const byId = new Map();
-  for (const f of buildingSource.getFeatures()) byId.set(getFeatureId(f), f);
-  for (const [id, entry] of state.selectedFeatures) {
-    if (byId.has(id)) entry.feature = byId.get(id);
+  const byPnu = new Map();
+  for (const f of buildingSource.getFeatures()) {
+    const key = getSelectionKey(f);
+    if (key) byPnu.set(key, f);
+  }
+  for (const [key, entry] of state.selectedFeatures) {
+    if (byPnu.has(key)) entry.feature = byPnu.get(key);
   }
   buildingLayer.changed();
 }
 
-// ===== 큐 =====
+// ===== API 큐 =====
 const lookupQueue = [];
 let activeLookups = 0;
 const MAX_CONCURRENT = 4;
 
-function queueLookup(id, f) { lookupQueue.push({ id, feature: f }); processQueue(); }
+function queueLookup(key, f) { lookupQueue.push({ key, feature: f }); processQueue(); }
 
 async function processQueue() {
   while (lookupQueue.length > 0 && activeLookups < MAX_CONCURRENT) {
-    const { id, feature } = lookupQueue.shift();
-    if (!state.selectedFeatures.has(id)) continue;
+    const { key, feature } = lookupQueue.shift();
+    if (!state.selectedFeatures.has(key)) continue;
     activeLookups++;
-    state.loading.add(id);
+    state.loading.add(key);
     renderList();
     fetchBuildingInfo(feature).then(info => {
       activeLookups--;
-      state.loading.delete(id);
-      if (state.selectedFeatures.has(id)) state.selectedFeatures.get(id).info = info;
+      state.loading.delete(key);
+      if (state.selectedFeatures.has(key)) state.selectedFeatures.get(key).info = info;
       renderList();
       updateSummary();
       processQueue();
@@ -260,19 +267,18 @@ function typeBadge(type) {
 
 // ===== UI 렌더링 =====
 function renderList() {
-  const ul       = document.getElementById('selectionList');
-  const empty    = document.getElementById('emptyState');
+  const ul        = document.getElementById('selectionList');
+  const empty     = document.getElementById('emptyState');
   const listCount = document.getElementById('listCount');
-  ul.innerHTML   = '';
+  ul.innerHTML    = '';
 
   const entries = Array.from(state.selectedFeatures.entries());
   listCount.textContent = entries.length;
   empty.style.display   = entries.length === 0 ? '' : 'none';
 
-  for (const [id, { feature, info }] of entries) {
+  for (const [key, { feature, info }] of entries) {
     const li = document.createElement('li');
 
-    // 헤더
     const head = document.createElement('div');
     head.className = 'item-head';
     const nameEl = document.createElement('div');
@@ -283,7 +289,7 @@ function renderList() {
     removeBtn.textContent = '✕';
     removeBtn.onclick = (e) => {
       e.stopPropagation();
-      state.selectedFeatures.delete(id);
+      state.selectedFeatures.delete(key);
       buildingLayer.changed();
       renderList();
       updateSummary();
@@ -292,24 +298,20 @@ function renderList() {
     head.appendChild(removeBtn);
     li.appendChild(head);
 
-    // 주소
     const addr = document.createElement('div');
     addr.className = 'item-addr';
     addr.textContent = info?.address || getBuildingAddress(feature);
     li.appendChild(addr);
 
-    // 상태별 하단
-    if (state.loading.has(id)) {
+    if (state.loading.has(key)) {
       li.insertAdjacentHTML('beforeend', `<div class="item-loading">⟳ 건축물대장 조회 중...</div>`);
     } else if (info?.error) {
       li.classList.add('error');
       li.insertAdjacentHTML('beforeend', `<div class="item-error">⚠ ${info.error}</div>`);
     } else if (info) {
-      // 용도별 breakdown
       const breakdownHtml = info.breakdown.map(g =>
         `${typeBadge(g.type)} <strong>${g.meters}</strong>개`
       ).join('  ');
-
       li.insertAdjacentHTML('beforeend', `
         <div class="item-breakdown">${breakdownHtml}</div>
         <div class="item-total">계량기 합계 <strong>${info.totalMeters}</strong>개</div>
@@ -339,14 +341,11 @@ function updateSummary() {
 
   document.getElementById('sumCount').textContent  = state.selectedFeatures.size.toLocaleString();
   document.getElementById('sumHhld').textContent   = total.toLocaleString();
-
-  // 용도별 소계
   document.getElementById('sumApartment').textContent  = byType.apartment.toLocaleString();
   document.getElementById('sumSingle').textContent     = byType.single.toLocaleString();
   document.getElementById('sumOneroom').textContent    = byType.oneroom.toLocaleString();
   document.getElementById('sumCommercial').textContent = byType.commercial.toLocaleString();
 
-  // 0인 항목 흐리게
   ['apartment','single','oneroom','commercial'].forEach(t => {
     document.getElementById(`row-${t}`).style.opacity = byType[t] === 0 ? '0.35' : '1';
   });
@@ -360,17 +359,24 @@ async function loadBuildings() {
     showToast(`줌 ${CONFIG.MIN_LOAD_ZOOM} 이상에서 사용하세요 (현재 ${zoom.toFixed(1)})`, 'warn');
     return;
   }
-  const extent  = view.calculateExtent(map.getSize());
-  const b       = ol.proj.transformExtent(extent, 'EPSG:3857', 'EPSG:4326');
+  const extent = view.calculateExtent(map.getSize());
+  const b = ol.proj.transformExtent(extent, 'EPSG:3857', 'EPSG:4326');
   setLoading(true, '건물 로딩 중...');
   try {
     const url = `/api/wfs?bbox=${b[1]},${b[0]},${b[3]},${b[2]}&typename=${CONFIG.BUILDING_LAYER}&maxFeatures=${CONFIG.MAX_FEATURES}`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`WFS 오류 (${res.status})`);
-    const gj  = await res.json();
-    if (!gj.features?.length) { showToast('이 영역에 건물 없음', 'warn'); buildingSource.clear(); setStatus('건물 0건'); return; }
+    const gj = await res.json();
+    if (!gj.features?.length) {
+      showToast('이 영역에 건물 없음', 'warn');
+      buildingSource.clear();
+      setStatus('건물 0건');
+      return;
+    }
     buildingSource.clear();
-    const features = new ol.format.GeoJSON().readFeatures(gj, { dataProjection: 'EPSG:4326', featureProjection: 'EPSG:3857' });
+    const features = new ol.format.GeoJSON().readFeatures(gj, {
+      dataProjection: 'EPSG:4326', featureProjection: 'EPSG:3857',
+    });
     buildingSource.addFeatures(features);
     setStatus(`건물 ${features.length}건 표시 중`);
     rerenderSelections();
@@ -384,26 +390,24 @@ async function loadBuildings() {
 
 // ===== 상호작용 =====
 const dragBox = new ol.interaction.DragBox({ condition: ol.events.condition.shiftKeyOnly });
+
 dragBox.on('boxend', () => {
   const extent = dragBox.getGeometry().getExtent();
-  console.log('드래그 박스 extent:', extent);
-  console.log('전체 건물 수:', buildingSource.getFeatures().length);
-
-  // forEachFeatureIntersectingExtent 대신 직접 필터링
-  const candidates = buildingSource.getFeatures().filter(f => {
-    const fExt = f.getGeometry().getExtent();
-    return ol.extent.intersects(extent, fExt);
-  });
-
-  console.log('선택된 건물 수:', candidates.length);
+  const candidates = buildingSource.getFeatures().filter(f =>
+    ol.extent.intersects(extent, f.getGeometry().getExtent())
+  );
   if (!candidates.length) { showToast('영역 내 건물 없음', 'warn'); return; }
-  selectMany(candidates);
-  showToast(`${candidates.length}개 건물 선택됨`);
+  const added = selectMany(candidates);
+  const skipped = candidates.length - added;
+  const msg = skipped > 0
+    ? `${added}개 선택됨 (중복 ${skipped}개 제외)`
+    : `${added}개 건물 선택됨`;
+  showToast(msg);
 });
+
 map.addInteraction(dragBox);
 
 map.on('singleclick', evt => {
-  // Shift+드래그 후 singleclick 발생 시 무시 (dragBox와 충돌 방지)
   if (ol.events.condition.shiftKeyOnly(evt)) return;
   const isCtrl = ol.events.condition.platformModifierKeyOnly(evt);
   let hit = null;
@@ -416,20 +420,26 @@ map.on('singleclick', evt => {
 let hovered = null;
 map.on('pointermove', evt => {
   if (evt.dragging) return;
-  const f = map.forEachFeatureAtPixel(map.getEventPixel(evt.originalEvent), (feat, l) => l === buildingLayer ? feat : null);
+  const f = map.forEachFeatureAtPixel(
+    map.getEventPixel(evt.originalEvent),
+    (feat, l) => l === buildingLayer ? feat : null
+  );
   map.getTargetElement().style.cursor = f ? 'pointer' : '';
   if (hovered !== f) {
     if (hovered) hovered.setStyle(undefined);
-    if (f && !state.selectedFeatures.has(getFeatureId(f))) f.setStyle(hoverStyle);
+    if (f) {
+      const key = getSelectionKey(f);
+      if (!state.selectedFeatures.has(key)) f.setStyle(hoverStyle);
+    }
     hovered = f;
   }
 });
 
 // ===== UI 이벤트 =====
-document.getElementById('clearBtn').onclick   = clearSelection;
-document.getElementById('reloadBtn').onclick  = loadBuildings;
-document.getElementById('exportBtn').onclick  = exportCSV;
-document.getElementById('searchBtn').onclick  = searchAddress;
+document.getElementById('clearBtn').onclick  = clearSelection;
+document.getElementById('reloadBtn').onclick = loadBuildings;
+document.getElementById('exportBtn').onclick = exportCSV;
+document.getElementById('searchBtn').onclick = searchAddress;
 document.getElementById('searchInput').onkeydown = e => { if (e.key === 'Enter') searchAddress(); };
 
 async function searchAddress() {
@@ -441,7 +451,10 @@ async function searchAddress() {
     const data = await res.json();
     const pt   = data?.response?.result?.point;
     if (!pt) throw new Error('주소를 찾을 수 없습니다');
-    map.getView().animate({ center: ol.proj.fromLonLat([parseFloat(pt.x), parseFloat(pt.y)]), zoom: 17, duration: 600 });
+    map.getView().animate({
+      center: ol.proj.fromLonLat([parseFloat(pt.x), parseFloat(pt.y)]),
+      zoom: 17, duration: 600,
+    });
     setTimeout(loadBuildings, 700);
   } catch (err) { showToast(err.message, 'error'); }
   finally { setLoading(false); }
@@ -452,22 +465,33 @@ function exportCSV() {
   const rows = [['번호','건물명','주소','계량기합계','공동주택','단독주택','원룸','일반용']];
   let i = 1;
   for (const [, { info, feature }] of state.selectedFeatures) {
-    const bd = info?.breakdown || [];
+    const bd  = info?.breakdown || [];
     const get = t => (bd.find(g => g.type === t)?.meters ?? '');
-    rows.push([i++, info?.name || getBuildingName(feature), info?.address || getBuildingAddress(feature),
-      info?.totalMeters ?? '', get('apartment'), get('single'), get('oneroom'), get('commercial')]);
+    rows.push([
+      i++,
+      info?.name || getBuildingName(feature),
+      info?.address || getBuildingAddress(feature),
+      info?.totalMeters ?? '',
+      get('apartment'), get('single'), get('oneroom'), get('commercial'),
+    ]);
   }
   const csv  = '\uFEFF' + rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-  const a    = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `계량기집계_${new Date().toISOString().slice(0,10)}.csv` });
-  a.click(); URL.revokeObjectURL(a.href);
+  const a    = Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(blob),
+    download: `계량기집계_${new Date().toISOString().slice(0,10)}.csv`,
+  });
+  a.click();
+  URL.revokeObjectURL(a.href);
   showToast('CSV 다운로드 완료');
 }
 
 function showToast(msg, type = '') {
   const t = document.getElementById('toast');
-  t.textContent = msg; t.className = `toast show ${type}`;
-  clearTimeout(t._timer); t._timer = setTimeout(() => { t.className = 'toast'; }, 3000);
+  t.textContent = msg;
+  t.className = `toast show ${type}`;
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => { t.className = 'toast'; }, 3000);
 }
 function setLoading(on, msg) { document.getElementById('loadIndicator').hidden = !on; if (msg) setStatus(msg); }
 function setStatus(msg) { document.getElementById('statusMsg').textContent = msg; }
