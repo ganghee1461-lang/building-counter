@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>건축물 세대수 집계기</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@v8.2.0/ol.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <!-- 좌측: 지도 -->
+    <main class="map-wrap">
+      <div id="map"></div>
+
+      <!-- 상단 컨트롤 바 -->
+      <div class="topbar">
+        <div class="brand">
+          <span class="brand-mark">BC</span>
+          <div>
+            <div class="brand-name">건축물 세대수 집계기</div>
+            <div class="brand-sub">BLDG-COUNTER · v1.0</div>
+          </div>
+        </div>
+        <div class="search-box">
+          <input id="searchInput" type="text" placeholder="주소 검색 (예: 청주시 상당구 ...)" />
+          <button id="searchBtn">검색</button>
+        </div>
+      </div>
+
+      <!-- 좌측 하단 도움말 -->
+      <div class="legend">
+        <div class="legend-title">조작 방법</div>
+        <div class="legend-row"><kbd>SHIFT</kbd> + 드래그 <span>영역 선택</span></div>
+        <div class="legend-row"><kbd>CTRL</kbd> + 클릭 <span>개별 토글</span></div>
+        <div class="legend-row"><kbd>클릭</kbd> <span>단일 선택</span></div>
+        <div class="legend-row">
+          <button id="reloadBtn" class="mini-btn">↻ 이 영역 건물 불러오기</button>
+        </div>
+      </div>
+
+      <!-- 우측 하단 상태 -->
+      <div class="status-bar">
+        <div id="statusMsg">준비</div>
+        <div id="loadIndicator" class="load-indicator" hidden>
+          <span class="dot"></span><span>조회 중</span>
+        </div>
+      </div>
+    </main>
+
+    <!-- 우측: 결과 패널 -->
+    <aside class="panel">
+      <div class="summary">
+        <div class="summary-title">합계</div>
+        <div class="summary-stats">
+          <div class="stat">
+            <div class="stat-label">선택 건물</div>
+            <div class="stat-value" id="sumCount">0</div>
+            <div class="stat-unit">동</div>
+          </div>
+          <div class="stat highlight">
+            <div class="stat-label">세대수</div>
+            <div class="stat-value" id="sumHhld">0</div>
+            <div class="stat-unit">세대</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">호수</div>
+            <div class="stat-value" id="sumHo">0</div>
+            <div class="stat-unit">호</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">가구수</div>
+            <div class="stat-value" id="sumFmly">0</div>
+            <div class="stat-unit">가구</div>
+          </div>
+        </div>
+        <div class="actions">
+          <button id="clearBtn" class="btn-secondary">전체 해제</button>
+          <button id="exportBtn" class="btn-primary">CSV 내보내기</button>
+        </div>
+      </div>
+
+      <div class="list-header">
+        <span>선택 목록</span>
+        <span id="listCount" class="badge">0</span>
+      </div>
+      <div class="list-wrap">
+        <ul id="selectionList"></ul>
+        <div id="emptyState" class="empty">
+          <div class="empty-icon">⌖</div>
+          <div>지도에서 건물을 선택하세요</div>
+          <div class="empty-sub">SHIFT+드래그 또는 클릭</div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- 토스트 -->
+  <div id="toast" class="toast"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/ol@v8.2.0/dist/ol.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
