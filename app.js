@@ -7,21 +7,16 @@
 
 // ===== 설정 =====
 const CONFIG = {
-  // 브이월드 WFS 도로명주소건물 레이어
-  // (만약 작동 안 하면 'lp_pa_cbnd_bubun' 등 다른 이름 시도)
   BUILDING_LAYER: 'lt_c_spbd',
-  // 초기 위치: 청주시 중심
   INITIAL_CENTER: [127.4890, 36.6357],
   INITIAL_ZOOM: 15,
-  // 건물 폴리곤 로딩 최소 줌 레벨
   MIN_LOAD_ZOOM: 15,
-  // WFS 한번에 가져올 최대 건물 수
   MAX_FEATURES: 500,
 };
 
 // ===== 전역 상태 =====
 const state = {
-  selectedFeatures: new Map(),  // mgmBldrgstPk -> { feature, info }
+  selectedFeatures: new Map(),
   loading: new Set(),
 };
 
@@ -36,10 +31,8 @@ const baseLayer = new ol.layer.Tile({
   }),
 });
 
-// 건물 폴리곤 벡터 소스 (수동 갱신)
 const buildingSource = new ol.source.Vector();
 
-// 스타일: 일반 / 호버 / 선택
 const defaultStyle = new ol.style.Style({
   fill: new ol.style.Fill({ color: 'rgba(45, 65, 95, 0.18)' }),
   stroke: new ol.style.Stroke({ color: '#2d415f', width: 1 }),
@@ -64,6 +57,9 @@ const buildingLayer = new ol.layer.Vector({
   },
 });
 
+// 지도를 전역에 노출 (디버깅용)
+window.buildingSource = buildingSource;
+
 const map = new ol.Map({
   target: 'map',
   layers: [baseLayer, buildingLayer],
@@ -78,32 +74,54 @@ const map = new ol.Map({
   }),
 });
 
+window.map = map;
+
 // ===== 유틸: feature ID 추출 =====
+// 브이월드 lt_c_spbd 속성: pk(고유키), bd_mgt_sn(건물관리번호), pnu(지번코드 19자리)
 function getFeatureId(feature) {
-  // 건물관리번호를 키로 사용
-  return feature.get('mgmBldrgstPk') ||
-         feature.get('bldMgtNo') ||
-         feature.get('bld_mgt_no') ||
-         feature.get('mngBldrgstPk') ||
+  return feature.get('pk') ||
+         feature.get('bd_mgt_sn') ||
+         feature.get('pnu') ||
          feature.getId() ||
          JSON.stringify(feature.getGeometry().getExtent());
 }
 
-// ===== 건물관리번호 파싱 =====
-// 예: "43111-1-00010001" or "4311100000-1-00010001-XX..." 형태
-function parseBldMgtNo(mgtNo) {
-  if (!mgtNo) return null;
-  // 숫자만 추출 (대시 등 제거)
-  const clean = String(mgtNo).replace(/[^0-9]/g, '');
+// ===== PNU 파싱 (19자리 지번 코드) =====
+// 구조: 시군구코드(5) + 법정동코드(5) + 산여부(1) + 본번(4) + 부번(4)
+// PNU 산여부: 1=일반, 2=산  →  건축HUB platGbCd: 0=일반, 1=산
+function parsePnu(pnu) {
+  if (!pnu) return null;
+  const clean = String(pnu).replace(/[^0-9]/g, '');
   if (clean.length < 19) return null;
 
+  const sanCode = clean.substring(10, 11);
   return {
     sigunguCd: clean.substring(0, 5),
     bjdongCd: clean.substring(5, 10),
-    platGbCd: clean.substring(10, 11),
+    platGbCd: sanCode === '2' ? '1' : '0',
     bun: clean.substring(11, 15),
     ji: clean.substring(15, 19),
   };
+}
+
+// ===== 건물 속성에서 주소/이름 추출 =====
+function getBuildingName(feature) {
+  return feature.get('buld_nm') ||
+         feature.get('buld_nm_dc') ||
+         feature.get('bul_eng_nm') ||
+         '(건물명 없음)';
+}
+
+function getBuildingAddress(feature) {
+  // 도로명주소 조립: 시도 + 시군구 + 구 + 도로명 + 건물번호
+  const parts = [
+    feature.get('sido'),
+    feature.get('sigungu'),
+    feature.get('gu'),
+    feature.get('rd_nm'),
+    feature.get('buld_no'),
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(' ') : '주소 정보 없음';
 }
 
 // ===== WFS로 건물 폴리곤 가져오기 =====
@@ -117,7 +135,6 @@ async function loadBuildings() {
   }
 
   const extent = view.calculateExtent(map.getSize());
-  // EPSG:3857 → EPSG:4326
   const bbox4326 = ol.proj.transformExtent(extent, 'EPSG:3857', 'EPSG:4326');
   const [minX, minY, maxX, maxY] = bbox4326;
 
@@ -136,7 +153,6 @@ async function loadBuildings() {
       return;
     }
 
-    // GeoJSON → OpenLayers Feature
     buildingSource.clear();
     const reader = new ol.format.GeoJSON();
     const features = reader.readFeatures(geojson, {
@@ -146,8 +162,6 @@ async function loadBuildings() {
     buildingSource.addFeatures(features);
 
     setStatus(`건물 ${features.length}건 표시 중`);
-
-    // 선택 상태 복원 (이미 선택된 건물 다시 표시)
     rerenderSelections();
   } catch (err) {
     console.error(err);
@@ -160,14 +174,11 @@ async function loadBuildings() {
 
 // ===== 건축HUB API로 세대수 조회 =====
 async function fetchBuildingInfo(feature) {
-  const mgtNo = feature.get('mgmBldrgstPk') ||
-                feature.get('bldMgtNo') ||
-                feature.get('bld_mgt_no') ||
-                feature.get('mngBldrgstPk');
+  const pnu = feature.get('pnu');
+  const parsed = parsePnu(pnu);
 
-  const parsed = parseBldMgtNo(mgtNo);
   if (!parsed) {
-    return { error: '건물관리번호 파싱 실패' };
+    return { error: `PNU 파싱 실패: ${pnu}` };
   }
 
   try {
@@ -197,7 +208,19 @@ async function fetchBuildingInfo(feature) {
       return summarizeItems(items2);
     }
 
-    return summarizeItems(items);
+    // 표제부에서 같은 PNU 안에 여러 동이 있을 수 있음
+    // 클릭한 건물의 동명(buld_nm)과 일치하는 것만 필터링 시도
+    const targetName = (feature.get('buld_nm') || '').trim();
+    let filtered = items;
+    if (targetName && items.length > 1) {
+      const match = items.filter(it => {
+        const nm = (it.bldNm || it.dongNm || '').trim();
+        return nm && (nm === targetName || nm.includes(targetName) || targetName.includes(nm));
+      });
+      if (match.length > 0) filtered = match;
+    }
+
+    return summarizeItems(filtered);
   } catch (err) {
     console.error(err);
     return { error: err.message };
@@ -205,7 +228,6 @@ async function fetchBuildingInfo(feature) {
 }
 
 function extractItems(data) {
-  // 공공데이터 응답 구조: response.body.items.item
   const body = data?.response?.body;
   if (!body || body.totalCount == 0 || !body.items) return [];
   const item = body.items.item;
@@ -241,7 +263,6 @@ function toggleSelection(feature) {
     state.selectedFeatures.delete(id);
   } else {
     state.selectedFeatures.set(id, { feature, info: null });
-    // 비동기로 세대수 조회
     queueLookup(id, feature);
   }
   buildingLayer.changed();
@@ -270,7 +291,6 @@ function clearSelection() {
 }
 
 function rerenderSelections() {
-  // 지도 갱신 후 selectedFeatures의 feature 참조 업데이트
   const currentFeatures = buildingSource.getFeatures();
   const byId = new Map();
   for (const f of currentFeatures) {
@@ -282,7 +302,7 @@ function rerenderSelections() {
   buildingLayer.changed();
 }
 
-// ===== API 호출 큐 (동시 호출 제한) =====
+// ===== API 호출 큐 =====
 const lookupQueue = [];
 let activeLookups = 0;
 const MAX_CONCURRENT = 4;
@@ -336,7 +356,7 @@ function renderList() {
     head.className = 'item-head';
     const name = document.createElement('div');
     name.className = 'item-name';
-    name.textContent = info?.name || feature.get('bldNm') || feature.get('buld_nm') || '(건물명 없음)';
+    name.textContent = info?.name && info.name !== '건물' ? info.name : getBuildingName(feature);
     const removeBtn = document.createElement('button');
     removeBtn.className = 'item-remove';
     removeBtn.textContent = '✕';
@@ -353,11 +373,7 @@ function renderList() {
 
     const addr = document.createElement('div');
     addr.className = 'item-addr';
-    addr.textContent = info?.address ||
-                      feature.get('newPlatPlc') ||
-                      feature.get('road_addr') ||
-                      feature.get('platPlc') ||
-                      '주소 정보 없음';
+    addr.textContent = info?.address || getBuildingAddress(feature);
     li.appendChild(addr);
 
     if (state.loading.has(id)) {
@@ -383,7 +399,6 @@ function renderList() {
       li.appendChild(stats);
     }
 
-    // 클릭하면 해당 건물로 지도 이동
     li.onclick = () => {
       const ext = feature.getGeometry().getExtent();
       map.getView().fit(ext, { duration: 400, maxZoom: 18, padding: [50, 50, 50, 50] });
@@ -408,9 +423,7 @@ function updateSummary() {
   document.getElementById('sumFmly').textContent = totalFmly.toLocaleString();
 }
 
-// ===== 상호작용: 드래그 박스 / 클릭 =====
-
-// SHIFT+드래그 박스 선택
+// ===== 상호작용 =====
 const dragBox = new ol.interaction.DragBox({
   condition: ol.events.condition.shiftKeyOnly,
   className: 'ol-dragbox',
@@ -432,7 +445,6 @@ dragBox.on('boxend', () => {
 
 map.addInteraction(dragBox);
 
-// 일반 클릭 / CTRL+클릭
 map.on('singleclick', (evt) => {
   const isCtrl = ol.events.condition.platformModifierKeyOnly(evt);
   let hit = null;
@@ -447,13 +459,11 @@ map.on('singleclick', (evt) => {
   if (isCtrl) {
     toggleSelection(hit);
   } else {
-    // 단일 선택: 기존 비우고 이거만
     state.selectedFeatures.clear();
     toggleSelection(hit);
   }
 });
 
-// 호버 효과
 let hovered = null;
 map.on('pointermove', (evt) => {
   if (evt.dragging) return;
@@ -512,8 +522,8 @@ function exportCSV() {
   for (const [, { info, feature }] of state.selectedFeatures) {
     rows.push([
       i++,
-      info?.name || feature.get('bldNm') || '',
-      info?.address || feature.get('newPlatPlc') || '',
+      info?.name && info.name !== '건물' ? info.name : getBuildingName(feature),
+      info?.address || getBuildingAddress(feature),
       info?.hhld ?? '',
       info?.ho ?? '',
       info?.fmly ?? '',
@@ -531,7 +541,6 @@ function exportCSV() {
   showToast('CSV 다운로드 완료');
 }
 
-// ===== 헬퍼: 토스트 / 로딩 =====
 function showToast(msg, type = '') {
   const t = document.getElementById('toast');
   t.textContent = msg;
@@ -551,5 +560,4 @@ function setStatus(msg) {
   document.getElementById('statusMsg').textContent = msg;
 }
 
-// ===== 초기 로딩 =====
 setStatus('지도 로딩 완료. 줌인 후 "이 영역 건물 불러오기" 클릭');
