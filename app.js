@@ -403,6 +403,8 @@ dragBox.on('boxend', () => {
 map.addInteraction(dragBox);
 
 map.on('singleclick', evt => {
+  // Shift+드래그 후 singleclick 발생 시 무시 (dragBox와 충돌 방지)
+  if (ol.events.condition.shiftKeyOnly(evt)) return;
   const isCtrl = ol.events.condition.platformModifierKeyOnly(evt);
   let hit = null;
   map.forEachFeatureAtPixel(evt.pixel, (f, l) => { if (l === buildingLayer) { hit = f; return true; } });
