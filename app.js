@@ -385,8 +385,17 @@ async function loadBuildings() {
 // ===== 상호작용 =====
 const dragBox = new ol.interaction.DragBox({ condition: ol.events.condition.shiftKeyOnly });
 dragBox.on('boxend', () => {
-  const candidates = [];
-  buildingSource.forEachFeatureIntersectingExtent(dragBox.getGeometry().getExtent(), f => candidates.push(f));
+  const extent = dragBox.getGeometry().getExtent();
+  console.log('드래그 박스 extent:', extent);
+  console.log('전체 건물 수:', buildingSource.getFeatures().length);
+
+  // forEachFeatureIntersectingExtent 대신 직접 필터링
+  const candidates = buildingSource.getFeatures().filter(f => {
+    const fExt = f.getGeometry().getExtent();
+    return ol.extent.intersects(extent, fExt);
+  });
+
+  console.log('선택된 건물 수:', candidates.length);
   if (!candidates.length) { showToast('영역 내 건물 없음', 'warn'); return; }
   selectMany(candidates);
   showToast(`${candidates.length}개 건물 선택됨`);
