@@ -1,9 +1,5 @@
 /**
  * 국토교통부 건축HUB 건축물대장 API 프록시
- * - 표제부, 총괄표제부 조회 지원
- * - CORS 우회 + 서비스키 숨김
- *
- * 호출 예: /api/bldg?sigunguCd=43111&bjdongCd=...&endpoint=getBrTitleInfo
  */
 
 const ALLOWED_ENDPOINTS = new Set([
@@ -25,10 +21,10 @@ export async function onRequestGet(context) {
   }
 
   const sigunguCd = url.searchParams.get('sigunguCd');
-  const bjdongCd = url.searchParams.get('bjdongCd');
-  const platGbCd = url.searchParams.get('platGbCd') || '0';
-  const bun = url.searchParams.get('bun');
-  const ji = url.searchParams.get('ji');
+  const bjdongCd  = url.searchParams.get('bjdongCd');
+  const platGbCd  = url.searchParams.get('platGbCd') || '0';
+  const bun       = url.searchParams.get('bun');
+  const ji        = url.searchParams.get('ji');
 
   if (!sigunguCd || !bjdongCd || !bun || !ji) {
     return json({ error: '필수 파라미터: sigunguCd, bjdongCd, bun, ji' }, 400);
@@ -39,38 +35,71 @@ export async function onRequestGet(context) {
     return json({ error: 'DATA_GO_KR_KEY 환경변수가 설정되지 않았습니다' }, 500);
   }
 
-  const params = new URLSearchParams({
-    serviceKey: DATA_GO_KR_KEY,
-    sigunguCd,
-    bjdongCd,
-    platGbCd,
-    bun,
-    ji,
-    _type: 'json',
-    numOfRows: '100',
-    pageNo: '1',
-  });
+  // URLSearchParams 대신 문자열 직접 조립 (이중 인코딩 방지)
+  const queryString = [
+    `serviceKey=${DATA_GO_KR_KEY}`,
+    `sigunguCd=${sigunguCd}`,
+    `bjdongCd=${bjdongCd}`,
+    `platGbCd=${platGbCd}`,
+    `bun=${bun}`,
+    `ji=${ji}`,
+    `_type=json`,
+    `numOfRows=100`,
+    `pageNo=1`,
+  ].join('&');
 
-  const apiUrl = `https://apis.data.go.kr/1613000/BldRgstHubService/${endpoint}?${params}`;
+  const apiUrl = `https://apis.data.go.kr/1613000/BldRgstHubService/${endpoint}?${queryString}`;
 
   try {
-    const res = await fetch(apiUrl);
+    const res = await fetch(apiUrl, {
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': 'Mozilla/5.0',
+      },
+      cf: {
+        // Cloudflare 캐시 우회
+        cacheEverything: false,
+      },
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      return json({
+        error: `외부 API 오류 (${res.status})`,
+        raw: errText.substring(0, 300),
+      }, 502);
+    }
+
     const text = await res.text();
+
+    if (!text || text.trim() === '') {
+      return json({ error: '빈 응답 (외부 API 무응답)' }, 502);
+    }
+
+    // XML 오류 응답 감지
+    if (text.trim().startsWith('<')) {
+      return json({
+        error: 'XML 오류 응답 (서비스키 또는 파라미터 문제)',
+        raw: text.substring(0, 300),
+      }, 502);
+    }
 
     let data;
     try {
       data = JSON.parse(text);
     } catch (e) {
-      // 공공데이터포털은 키 오류 시 XML 반환하기도 함
       return json({
-        error: '응답 파싱 실패 (서비스키 오류 가능성)',
-        raw: text.substring(0, 500),
+        error: '응답 파싱 실패',
+        raw: text.substring(0, 300),
       }, 502);
     }
 
     return json(data);
   } catch (err) {
-    return json({ error: `API 요청 실패: ${err.message}` }, 500);
+    return json({
+      error: `fetch 실패: ${err.message}`,
+      stack: err.stack?.substring(0, 200),
+    }, 500);
   }
 }
 
