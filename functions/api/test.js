@@ -34,13 +34,13 @@ export async function onRequestGet(context) {
     });
   }
 
-  if (target === 'proxy' || target === 'all') {
+  if (target === 'ip' || target === 'all') {
     const key = env.VWORLD_KEY || '(no-key)';
-    const vworldPath = `api.vworld.kr/req/wfs?key=${key}&domain=building-counter.pages.dev&service=WFS&version=2.0.0&request=GetCapabilities`;
-    // allorigins: 서버사이드 요청 허용하는 공개 프록시
-    results.allorigins = await probe(`https://api.allorigins.win/raw?url=${encodeURIComponent('https://' + vworldPath)}`);
-    // thingproxy
-    results.thingproxy = await probe(`https://thingproxy.freeboard.io/fetch/https://${vworldPath}`);
+    // vworld 서버 IP 직접 호출 (도메인 차단 우회 시도)
+    results.vworld_ip = await probe(
+      `https://211.188.33.95/req/wfs?key=${key}&domain=building-counter.pages.dev&service=WFS&version=2.0.0&request=GetCapabilities`,
+      { Host: 'api.vworld.kr' }
+    );
   }
 
   return new Response(JSON.stringify(results, null, 2), {
