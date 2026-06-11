@@ -1,5 +1,3 @@
-import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
-
 const VWORLD_KEY = Deno.env.get("VWORLD_KEY") ?? "";
 const DATA_GO_KR_KEY = Deno.env.get("DATA_GO_KR_KEY") ?? "";
 
@@ -17,7 +15,7 @@ const ALLOWED_ENDPOINTS = new Set([
   "getBrExposPubuseAreaInfo",
 ]);
 
-serve(async (req: Request): Promise<Response> => {
+Deno.serve(async (req: Request): Promise<Response> => {
   const url = new URL(req.url);
 
   if (req.method === "OPTIONS") {
