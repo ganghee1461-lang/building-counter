@@ -460,36 +460,48 @@ map.on('pointermove', evt => {
   }
 });
 
+// ===== 시군구 중심 좌표 =====
+const SIG_CENTER = {
+  '43111': [127.524, 36.642], '43112': [127.458, 36.609],
+  '43113': [127.439, 36.657], '43114': [127.570, 36.782],
+  '43130': [127.926, 37.002], '43150': [128.209, 37.132],
+  '43720': [127.729, 36.489], '43730': [127.573, 36.306],
+  '43740': [127.776, 36.175], '43745': [127.584, 36.786],
+  '43750': [127.432, 36.855], '43760': [127.786, 36.814],
+  '43770': [127.690, 36.993], '43800': [128.366, 36.985],
+};
+
 // ===== UI 이벤트 =====
 document.getElementById('clearBtn').onclick  = clearSelection;
 document.getElementById('reloadBtn').onclick = loadBuildings;
 document.getElementById('exportBtn').onclick = exportCSV;
 document.getElementById('searchBtn').onclick = searchAddress;
 document.getElementById('searchInput').onkeydown = e => { if (e.key === 'Enter') searchAddress(); };
+document.getElementById('sigSelect').onchange = () => {
+  const sig = document.getElementById('sigSelect').value;
+  if (!sig || !SIG_CENTER[sig]) return;
+  map.getView().animate({ center: ol.proj.fromLonLat(SIG_CENTER[sig]), zoom: 13, duration: 600 });
+};
 
 async function searchAddress() {
   const q = document.getElementById('searchInput').value.trim();
   if (!q) return;
   setLoading(true, '주소 검색 중...');
   try {
-    const VWORLD_KEY = '12B2798C-A916-3C1E-B46E-9D7FC3C0AA45';
-    let pt = null;
-    for (const type of ['ROAD', 'PARCEL']) {
-      const params = new URLSearchParams({
-        service: 'address', request: 'getCoord', version: '2.0',
-        crs: 'EPSG:4326', address: q, refine: 'true', simple: 'false',
-        format: 'json', type, key: VWORLD_KEY,
-      });
-      const res  = await fetch(`https://api.vworld.kr/req/address?${params}`);
-      const data = await res.json();
-      if (data?.response?.status === 'OK') {
-        pt = data.response.result.point;
-        break;
-      }
-    }
-    if (!pt) throw new Error('주소를 찾을 수 없습니다');
+    // Nominatim (OSM) - 충북 범위 한정, 한국 우선
+    const params = new URLSearchParams({
+      q: q.includes('충북') || q.includes('충청북도') ? q : `충청북도 ${q}`,
+      format: 'json', limit: '1', countrycodes: 'kr',
+      accept_language: 'ko',
+    });
+    const res = await fetch(`https://nominatim.openstreetmap.org/search?${params}`, {
+      headers: { 'User-Agent': 'building-counter/1.0' },
+    });
+    const data = await res.json();
+    if (!data?.length) throw new Error('주소를 찾을 수 없습니다');
+    const { lon, lat } = data[0];
     map.getView().animate({
-      center: ol.proj.fromLonLat([parseFloat(pt.x), parseFloat(pt.y)]),
+      center: ol.proj.fromLonLat([parseFloat(lon), parseFloat(lat)]),
       zoom: 17, duration: 600,
     });
     setTimeout(loadBuildings, 700);
