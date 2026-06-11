@@ -10,6 +10,7 @@ const CONFIG = {
   INITIAL_ZOOM: 15,
   MIN_LOAD_ZOOM: 15,
   MAX_FEATURES: 500,
+  API_BASE: 'https://building-counter.ganghee1461-lang.deno.net',
 };
 
 const state = {
@@ -20,7 +21,7 @@ const state = {
 // ===== 지도 초기화 =====
 const baseLayer = new ol.layer.Tile({
   source: new ol.source.XYZ({
-    url: '/api/wmts?layer=Base&z={z}&y={y}&x={x}',
+    url: CONFIG.API_BASE + '/api/wmts?layer=Base&z={z}&y={y}&x={x}',
     attributions: '© <a href="https://www.vworld.kr/">VWorld</a>',
     crossOrigin: 'anonymous',
   }),
@@ -118,7 +119,7 @@ async function fetchBuildingInfo(feature) {
   try {
     // 1) 표제부
     let params = new URLSearchParams({ ...parsed, endpoint: 'getBrTitleInfo' });
-    let res    = await fetch(`/api/bldg?${params}`);
+    let res    = await fetch(`${CONFIG.API_BASE}/api/bldg?${params}`);
     if (!res.ok) throw new Error(`API 오류 (${res.status})`);
     let data   = await res.json();
     let items  = extractItems(data);
@@ -126,7 +127,7 @@ async function fetchBuildingInfo(feature) {
     // 2) 표제부 없으면 총괄표제부
     if (items.length === 0) {
       params = new URLSearchParams({ ...parsed, endpoint: 'getBrRecapTitleInfo' });
-      res    = await fetch(`/api/bldg?${params}`);
+      res    = await fetch(`${CONFIG.API_BASE}/api/bldg?${params}`);
       data   = await res.json();
       items  = extractItems(data);
       if (items.length === 0) return { error: '건축물대장 미등록' };
@@ -363,7 +364,7 @@ async function loadBuildings() {
   const b = ol.proj.transformExtent(extent, 'EPSG:3857', 'EPSG:4326');
   setLoading(true, '건물 로딩 중...');
   try {
-    const url = `/api/wfs?bbox=${b[1]},${b[0]},${b[3]},${b[2]}&typename=${CONFIG.BUILDING_LAYER}&maxFeatures=${CONFIG.MAX_FEATURES}`;
+    const url = `${CONFIG.API_BASE}/api/wfs?bbox=${b[1]},${b[0]},${b[3]},${b[2]}&typename=${CONFIG.BUILDING_LAYER}&maxFeatures=${CONFIG.MAX_FEATURES}`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`WFS 오류 (${res.status})`);
     const gj = await res.json();
@@ -447,7 +448,7 @@ async function searchAddress() {
   if (!q) return;
   setLoading(true, '주소 검색 중...');
   try {
-    const res  = await fetch(`/api/geocode?address=${encodeURIComponent(q)}`);
+    const res  = await fetch(`${CONFIG.API_BASE}/api/geocode?address=${encodeURIComponent(q)}`);
     const data = await res.json();
     const pt   = data?.response?.result?.point;
     if (!pt) throw new Error('주소를 찾을 수 없습니다');
