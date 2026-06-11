@@ -10,22 +10,43 @@ const CONFIG = {
   INITIAL_ZOOM: 15,
   MIN_LOAD_ZOOM: 15,
   MAX_FEATURES: 500,
-  API_BASE: 'https://building-counter.ganghee1461-lang.deno.net',
+  VWORLD_DOMAIN: 'building-counter.pages.dev',
 };
 
 const state = {
   selectedFeatures: new Map(), // key: PNU
   loading: new Set(),
+  vworldKey: null,
 };
 
+// ===== vworld 키 로드 =====
+async function initVworldKey() {
+  try {
+    const res = await fetch('/api/config');
+    const data = await res.json();
+    state.vworldKey = data.vworldKey;
+    initMap();
+  } catch (err) {
+    showToast('설정 로드 실패: ' + err.message, 'error');
+  }
+}
+
 // ===== 지도 초기화 =====
-const baseLayer = new ol.layer.Tile({
-  source: new ol.source.XYZ({
-    url: CONFIG.API_BASE + '/api/wmts?layer=Base&z={z}&y={y}&x={x}',
-    attributions: '© <a href="https://www.vworld.kr/">VWorld</a>',
-    crossOrigin: 'anonymous',
-  }),
-});
+function initMap() {
+  const key = state.vworldKey;
+
+  const baseLayer = new ol.layer.Tile({
+    source: new ol.source.XYZ({
+      url: `https://api.vworld.kr/req/wmts/1.0.0/${key}/Base/{z}/{y}/{x}.png`,
+      attributions: '© <a href="https://www.vworld.kr/">VWorld</a>',
+      crossOrigin: 'anonymous',
+    }),
+  });
+
+  window._baseLayer = baseLayer;
+  map.getLayers().insertAt(0, baseLayer);
+  setStatus('지도 로딩 완료. 줌인 후 "이 영역 건물 불러오기" 클릭');
+}
 
 const buildingSource = new ol.source.Vector();
 window.buildingSource = buildingSource;
@@ -44,7 +65,7 @@ const buildingLayer = new ol.layer.Vector({
 
 const map = new ol.Map({
   target: 'map',
-  layers: [baseLayer, buildingLayer],
+  layers: [buildingLayer],
   view: new ol.View({
     center: ol.proj.fromLonLat(CONFIG.INITIAL_CENTER),
     zoom: CONFIG.INITIAL_ZOOM,
@@ -55,7 +76,6 @@ const map = new ol.Map({
 window.map = map;
 
 // ===== 유틸 =====
-// PNU를 선택 기준 키로 사용 (중복 방지)
 function getSelectionKey(f) {
   return f.get('pnu') || f.get('pk') || f.getId();
 }
@@ -91,22 +111,18 @@ function calcMeters(item) {
   const ho   = parseInt(item.hoCnt    || 0, 10);
   const fmly = parseInt(item.fmlyCnt  || 0, 10);
 
-  // 단독주택
   if (['01000','01001','01002'].includes(cd)) {
     return { type: 'single', label: '단독주택', meters: fmly > 0 ? fmly : hhld > 0 ? hhld : 0 };
   }
-  // 원룸 계열
   const isOneroom = ['01003','02003','02004'].includes(cd) ||
     ['고시원','다중생활','기숙사','노인복지','노인요양'].some(k => nm.includes(k));
   if (isOneroom) {
     const cnt = fmly > 0 ? fmly : hhld > 0 ? hhld : ho;
     return { type: 'oneroom', label: '원룸', meters: cnt };
   }
-  // 공동주택
   if (['02000','02001','02002'].includes(cd)) {
     return { type: 'apartment', label: '공동주택', meters: hhld > 0 ? hhld : ho };
   }
-  // 일반용
   return { type: 'commercial', label: '일반용', meters: ho };
 }
 
@@ -117,17 +133,15 @@ async function fetchBuildingInfo(feature) {
   if (!parsed) return { error: `PNU 파싱 실패: ${pnu}` };
 
   try {
-    // 1) 표제부
     let params = new URLSearchParams({ ...parsed, endpoint: 'getBrTitleInfo' });
-    let res    = await fetch(`${CONFIG.API_BASE}/api/bldg?${params}`);
+    let res    = await fetch(`/api/bldg?${params}`);
     if (!res.ok) throw new Error(`API 오류 (${res.status})`);
     let data   = await res.json();
     let items  = extractItems(data);
 
-    // 2) 표제부 없으면 총괄표제부
     if (items.length === 0) {
       params = new URLSearchParams({ ...parsed, endpoint: 'getBrRecapTitleInfo' });
-      res    = await fetch(`${CONFIG.API_BASE}/api/bldg?${params}`);
+      res    = await fetch(`/api/bldg?${params}`);
       data   = await res.json();
       items  = extractItems(data);
       if (items.length === 0) return { error: '건축물대장 미등록' };
@@ -147,7 +161,6 @@ function extractItems(data) {
 }
 
 function buildResult(items, feature) {
-  // 용도별 그룹핑
   const groups = {};
   for (const it of items) {
     const { type, label, meters } = calcMeters(it);
@@ -158,7 +171,6 @@ function buildResult(items, feature) {
   let breakdown = Object.values(groups);
   let totalMeters = breakdown.reduce((s, g) => s + g.meters, 0);
 
-  // ★ 전체 0이면 일반용 1호로 처리
   if (totalMeters === 0) {
     breakdown = [{ type: 'commercial', label: '일반용', meters: 1 }];
     totalMeters = 1;
@@ -178,7 +190,7 @@ function buildResult(items, feature) {
   };
 }
 
-// ===== 선택 처리 (PNU 기준 중복 방지) =====
+// ===== 선택 처리 =====
 function toggleSelection(f) {
   const key = getSelectionKey(f);
   if (!key) return;
@@ -198,7 +210,7 @@ function selectMany(features) {
   let added = 0;
   for (const f of features) {
     const key = getSelectionKey(f);
-    if (!key || state.selectedFeatures.has(key)) continue; // PNU 중복 스킵
+    if (!key || state.selectedFeatures.has(key)) continue;
     state.selectedFeatures.set(key, { feature: f, info: null });
     queueLookup(key, f);
     added++;
@@ -352,22 +364,41 @@ function updateSummary() {
   });
 }
 
-// ===== WFS 로딩 =====
-async function loadBuildings() {
+// ===== WFS 로딩 (JSONP) =====
+function loadBuildings() {
   const view = map.getView();
   const zoom = view.getZoom();
   if (zoom < CONFIG.MIN_LOAD_ZOOM) {
     showToast(`줌 ${CONFIG.MIN_LOAD_ZOOM} 이상에서 사용하세요 (현재 ${zoom.toFixed(1)})`, 'warn');
     return;
   }
+  if (!state.vworldKey) {
+    showToast('vworld 키 로드 중입니다. 잠시 후 다시 시도하세요.', 'warn');
+    return;
+  }
+
   const extent = view.calculateExtent(map.getSize());
   const b = ol.proj.transformExtent(extent, 'EPSG:3857', 'EPSG:4326');
   setLoading(true, '건물 로딩 중...');
-  try {
-    const url = `${CONFIG.API_BASE}/api/wfs?bbox=${b[1]},${b[0]},${b[3]},${b[2]}&typename=${CONFIG.BUILDING_LAYER}&maxFeatures=${CONFIG.MAX_FEATURES}`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`WFS 오류 (${res.status})`);
-    const gj = await res.json();
+
+  const cbName = '_wfsCb_' + Date.now();
+  const timer = setTimeout(() => {
+    cleanup();
+    showToast('건물 조회 시간 초과', 'error');
+    setLoading(false);
+    setStatus('조회 실패');
+  }, 15000);
+
+  function cleanup() {
+    delete window[cbName];
+    const el = document.getElementById(cbName);
+    if (el) el.remove();
+    clearTimeout(timer);
+  }
+
+  window[cbName] = function(gj) {
+    cleanup();
+    setLoading(false);
     if (!gj.features?.length) {
       showToast('이 영역에 건물 없음', 'warn');
       buildingSource.clear();
@@ -381,12 +412,21 @@ async function loadBuildings() {
     buildingSource.addFeatures(features);
     setStatus(`건물 ${features.length}건 표시 중`);
     rerenderSelections();
-  } catch (err) {
-    showToast(`건물 조회 실패: ${err.message}`, 'error');
-    setStatus('조회 실패');
-  } finally {
+  };
+
+  const bbox = `${b[1]},${b[0]},${b[3]},${b[2]}`;
+  const src = `https://api.vworld.kr/req/wfs?key=${state.vworldKey}&domain=${CONFIG.VWORLD_DOMAIN}&service=WFS&version=2.0.0&request=GetFeature&typename=${CONFIG.BUILDING_LAYER}&bbox=${bbox}&maxFeatures=${CONFIG.MAX_FEATURES}&output=application/json&srsname=EPSG:4326&FORMAT_OPTIONS=callback:${cbName}`;
+
+  const script = document.createElement('script');
+  script.id  = cbName;
+  script.src = src;
+  script.onerror = () => {
+    cleanup();
+    showToast('건물 조회 실패', 'error');
     setLoading(false);
-  }
+    setStatus('조회 실패');
+  };
+  document.head.appendChild(script);
 }
 
 // ===== 상호작용 =====
@@ -448,7 +488,7 @@ async function searchAddress() {
   if (!q) return;
   setLoading(true, '주소 검색 중...');
   try {
-    const res  = await fetch(`${CONFIG.API_BASE}/api/geocode?address=${encodeURIComponent(q)}`);
+    const res  = await fetch(`/api/geocode?address=${encodeURIComponent(q)}`);
     const data = await res.json();
     const pt   = data?.response?.result?.point;
     if (!pt) throw new Error('주소를 찾을 수 없습니다');
@@ -476,7 +516,7 @@ function exportCSV() {
       get('apartment'), get('single'), get('oneroom'), get('commercial'),
     ]);
   }
-  const csv  = '\uFEFF' + rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const csv  = '﻿' + rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
   const a    = Object.assign(document.createElement('a'), {
     href: URL.createObjectURL(blob),
@@ -497,4 +537,5 @@ function showToast(msg, type = '') {
 function setLoading(on, msg) { document.getElementById('loadIndicator').hidden = !on; if (msg) setStatus(msg); }
 function setStatus(msg) { document.getElementById('statusMsg').textContent = msg; }
 
-setStatus('지도 로딩 완료. 줌인 후 "이 영역 건물 불러오기" 클릭');
+setStatus('초기화 중...');
+initVworldKey();
