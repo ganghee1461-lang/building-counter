@@ -1,12 +1,15 @@
 /**
  * 브이월드 배경지도 타일 프록시
+ * - WMTS 타일 요청을 키 노출 없이 처리
+ *
+ * 호출 예: /api/wmts?layer=Base&z=15&y=12&x=27
  */
 
 export async function onRequestGet(context) {
   const { request, env } = context;
   const url = new URL(request.url);
 
-  const layer = url.searchParams.get('layer') || 'Base';
+  const layer = url.searchParams.get('layer') || 'Base';  // Base, Satellite, Hybrid, gray, midnight
   const z = url.searchParams.get('z');
   const y = url.searchParams.get('y');
   const x = url.searchParams.get('x');
@@ -24,15 +27,10 @@ export async function onRequestGet(context) {
 
   try {
     const res = await fetch(tileUrl);
-
     if (!res.ok) {
-      const errText = await res.text();
-      return new Response(`타일 요청 실패 (${res.status}): ${errText.substring(0, 200)}`, { status: 502 });
+      return new Response(`타일 요청 실패 (${res.status})`, { status: res.status });
     }
-
-    const arrayBuffer = await res.arrayBuffer();
-
-    return new Response(arrayBuffer, {
+    return new Response(res.body, {
       status: 200,
       headers: {
         'Content-Type': 'image/png',
@@ -41,6 +39,6 @@ export async function onRequestGet(context) {
       },
     });
   } catch (err) {
-    return new Response(`fetch 실패: ${err.message}`, { status: 500 });
+    return new Response(`타일 요청 실패: ${err.message}`, { status: 500 });
   }
 }
