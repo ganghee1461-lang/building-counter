@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>충북 건물 데이터 수집기</title>
+<style>
+  body { font-family: monospace; padding: 20px; background: #1a1a2e; color: #eee; }
+  h2 { color: #7ab4ff; }
+  button { padding: 10px 24px; background: #2d415f; color: #7ab4ff; border: 1px solid #7ab4ff; cursor: pointer; font-size: 14px; margin-right: 8px; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  #log { height: 300px; overflow-y: auto; background: #111; padding: 10px; font-size: 12px; border: 1px solid #333; margin: 12px 0; }
+  #progress { font-size: 18px; color: #6ddb97; margin: 8px 0; }
+  .warn { color: #ffaa4a; }
+  .ok { color: #6ddb97; }
+  .err { color: #ff6b6b; }
+</style>
+</head>
+<body>
+<h2>충북 건물 데이터 수집기</h2>
+<p>브이월드 WFS에서 충북 전체 건물 폴리곤+PNU를 수집합니다.<br>
+수집 완료 후 GeoJSON 파일이 자동 다운로드됩니다.</p>
+
+<div id="progress">대기 중</div>
+<div id="log"></div>
+
+<button id="startBtn" onclick="start()">수집 시작</button>
+<button id="stopBtn" onclick="stop()" disabled>중지</button>
+
+<script>
+const VWORLD_KEY = '12B2798C-A916-3C1E-B46E-9D7FC3C0AA45';
+const DOMAIN = 'building-counter.pages.dev';
+const TYPENAME = 'lt_c_spbd';
+const MAX_FEATURES = 500;
+
+// 충북 범위
+const BOUNDS = { minLng: 127.3, maxLng: 128.55, minLat: 36.1, maxLat: 37.25 };
+const STEP = 0.02; // 약 2km 격자
+const CONCURRENT = 3; // 동시 요청 수
+const DELAY_MS = 300; // 요청 간 딜레이
+
+let running = false;
+let collected = new Map(); // PNU → feature
+let totalCells = 0;
+let doneCells = 0;
+let errorCells = 0;
+
+function log(msg, cls = '') {
+  const div = document.getElementById('log');
+  const line = document.createElement('div');
+  if (cls) line.className = cls;
+  line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  div.appendChild(line);
+  div.scrollTop = div.scrollHeight;
+}
+
+function setProgress(msg) {
+  document.getElementById('progress').textContent = msg;
+}
+
+function buildCells() {
+  const cells = [];
+  for (let lat = BOUNDS.minLat; lat < BOUNDS.maxLat; lat = Math.round((lat + STEP) * 1000) / 1000) {
+    for (let lng = BOUNDS.minLng; lng < BOUNDS.maxLng; lng = Math.round((lng + STEP) * 1000) / 1000) {
+      cells.push({
+        minLat: lat, minLng: lng,
+        maxLat: Math.min(Math.round((lat + STEP) * 1000) / 1000, BOUNDS.maxLat),
+        maxLng: Math.min(Math.round((lng + STEP) * 1000) / 1000, BOUNDS.maxLng),
+      });
+    }
+  }
+  return cells;
+}
+
+async function fetchCell(cell) {
+  const { minLat, minLng, maxLat, maxLng } = cell;
+  const bbox = `${minLat},${minLng},${maxLat},${maxLng}`;
+  const url = `https://api.vworld.kr/req/wfs?key=${VWORLD_KEY}&domain=${DOMAIN}&service=WFS&version=2.0.0&request=GetFeature&typename=${TYPENAME}&bbox=${bbox}&maxFeatures=${MAX_FEATURES}&output=application/json&srsname=EPSG:4326`;
+
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const gj = await res.json();
+  return gj.features || [];
+}
+
+async function start() {
+  if (running) return;
+  running = true;
+  collected.clear();
+  doneCells = 0;
+  errorCells = 0;
+
+  document.getElementById('startBtn').disabled = true;
+  document.getElementById('stopBtn').disabled = false;
+
+  const cells = buildCells();
+  totalCells = cells.length;
+  log(`총 ${totalCells}개 격자 수집 시작`, 'ok');
+
+  // 큐 처리
+  let idx = 0;
+  async function worker() {
+    while (idx < cells.length && running) {
+      const cell = cells[idx++];
+      try {
+        const features = await fetchCell(cell);
+        let added = 0;
+        for (const f of features) {
+          const pnu = f.properties?.pnu;
+          if (pnu && !collected.has(pnu)) {
+            collected.set(pnu, f);
+            added++;
+          }
+        }
+        doneCells++;
+        if (doneCells % 20 === 0 || added > 0) {
+          log(`[${doneCells}/${totalCells}] 격자 완료, ${added}개 추가 (총 ${collected.size}건)`, 'ok');
+        }
+        setProgress(`진행: ${doneCells}/${totalCells} 격자 | 수집 건물: ${collected.size}개 | 오류: ${errorCells}`);
+      } catch (err) {
+        errorCells++;
+        log(`격자 오류: ${err.message}`, 'err');
+      }
+      await new Promise(r => setTimeout(r, DELAY_MS));
+    }
+  }
+
+  // 동시 워커 실행
+  await Promise.all(Array.from({ length: CONCURRENT }, worker));
+
+  if (running) {
+    log(`수집 완료! 총 ${collected.size}개 건물`, 'ok');
+    setProgress(`완료! 총 ${collected.size}개 건물 수집`);
+    download();
+  } else {
+    log('중지됨', 'warn');
+    setProgress(`중지 (${collected.size}개 수집됨)`);
+  }
+
+  running = false;
+  document.getElementById('startBtn').disabled = false;
+  document.getElementById('stopBtn').disabled = true;
+}
+
+function stop() {
+  running = false;
+}
+
+function download() {
+  const gj = {
+    type: 'FeatureCollection',
+    features: Array.from(collected.values()),
+  };
+  const blob = new Blob([JSON.stringify(gj)], { type: 'application/json' });
+  const a = Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(blob),
+    download: `chungbuk_buildings_${new Date().toISOString().slice(0,10)}.geojson`,
+  });
+  a.click();
+  URL.revokeObjectURL(a.href);
+  log('GeoJSON 파일 다운로드 완료', 'ok');
+}
+</script>
+</body>
+</html>
