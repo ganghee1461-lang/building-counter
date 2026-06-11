@@ -20,9 +20,8 @@ const state = {
 // ===== 지도 초기화 =====
 const baseLayer = new ol.layer.Tile({
   source: new ol.source.XYZ({
-    url: '/api/wmts?layer=Base&z={z}&y={y}&x={x}',
+    url: 'https://api.vworld.kr/req/wmts/1.0.0/12B2798C-A916-3C1E-B46E-9D7FC3C0AA45/Base/{z}/{y}/{x}.png',
     attributions: '© <a href="https://www.vworld.kr/">VWorld</a>',
-    crossOrigin: 'anonymous',
   }),
 });
 
@@ -342,7 +341,10 @@ function updateSummary() {
   });
 }
 
-// ===== WFS 로딩 =====
+// ===== 건물 데이터 캐시 =====
+const sigCache = new Map(); // sig → features[]
+
+// ===== 건물 로딩 =====
 async function loadBuildings() {
   const view = map.getView();
   const zoom = view.getZoom();
@@ -350,20 +352,52 @@ async function loadBuildings() {
     showToast(`줌 ${CONFIG.MIN_LOAD_ZOOM} 이상에서 사용하세요 (현재 ${zoom.toFixed(1)})`, 'warn');
     return;
   }
+
+  const sig = document.getElementById('sigSelect').value;
+  if (!sig) {
+    showToast('시군구를 먼저 선택하세요', 'warn');
+    return;
+  }
+
   const extent = view.calculateExtent(map.getSize());
   const b = ol.proj.transformExtent(extent, 'EPSG:3857', 'EPSG:4326');
+  // b: [minLng, minLat, maxLng, maxLat]
+  const [minLng, minLat, maxLng, maxLat] = b;
+
   setLoading(true, '건물 로딩 중...');
   try {
-    const url = `/api/buildings?bbox=${b[1]},${b[0]},${b[3]},${b[2]}`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`WFS 오류 (${res.status})`);
-    const gj = await res.json();
-    if (!gj.features?.length) {
+    if (!sigCache.has(sig)) {
+      setLoading(true, `${sig} 데이터 로딩 중...`);
+      const res = await fetch(`/api/buildings?sig=${sig}`);
+      if (!res.ok) throw new Error(`데이터 로드 실패 (${res.status})`);
+      const gj = await res.json();
+      // PNU 소문자 정규화
+      for (const f of (gj.features || [])) {
+        if (f.properties?.PNU && !f.properties.pnu) {
+          f.properties.pnu = f.properties.PNU;
+        }
+      }
+      sigCache.set(sig, gj.features || []);
+    }
+
+    const allFeatures = sigCache.get(sig);
+    const filtered = allFeatures.filter(f => {
+      const coords = f.geometry?.coordinates?.flat(3) || [];
+      for (let i = 0; i < coords.length - 1; i += 2) {
+        const lng = coords[i], lat = coords[i + 1];
+        if (lng >= minLng && lng <= maxLng && lat >= minLat && lat <= maxLat) return true;
+      }
+      return false;
+    });
+
+    if (!filtered.length) {
       showToast('이 영역에 건물 없음', 'warn');
       buildingSource.clear();
       setStatus('건물 0건');
       return;
     }
+
+    const gj = { type: 'FeatureCollection', features: filtered };
     buildingSource.clear();
     const features = new ol.format.GeoJSON().readFeatures(gj, {
       dataProjection: 'EPSG:4326', featureProjection: 'EPSG:3857',
