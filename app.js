@@ -366,13 +366,13 @@ const SIG_BOUNDS = {
   '43770': [127.45, 36.85, 127.80, 37.10], '43800': [128.15, 36.80, 128.60, 37.10],
 };
 
-function getSigFromCenter() {
-  const center = ol.proj.toLonLat(map.getView().getCenter());
-  const [lng, lat] = center;
-  for (const [sig, [minLng, minLat, maxLng, maxLat]] of Object.entries(SIG_BOUNDS)) {
-    if (lng >= minLng && lng <= maxLng && lat >= minLat && lat <= maxLat) return sig;
-  }
-  return null;
+function getSigsForExtent(b) {
+  // b: [minLng, minLat, maxLng, maxLat]
+  return Object.entries(SIG_BOUNDS)
+    .filter(([, [minLng, minLat, maxLng, maxLat]]) =>
+      b[2] >= minLng && b[0] <= maxLng && b[3] >= minLat && b[1] <= maxLat
+    )
+    .map(([sig]) => sig);
 }
 
 // ===== 건물 로딩 =====
@@ -384,30 +384,38 @@ async function loadBuildings() {
     return;
   }
 
-  const sig = getSigFromCenter();
-  if (!sig) {
-    showToast('충청북도 범위를 벗어났습니다', 'warn');
-    return;
-  }
-
   const extent = view.calculateExtent(map.getSize());
   const b = ol.proj.transformExtent(extent, 'EPSG:3857', 'EPSG:4326');
   const [minLng, minLat, maxLng, maxLat] = b;
 
+  const sigs = getSigsForExtent(b);
+  if (!sigs.length) {
+    showToast('충청북도 범위를 벗어났습니다', 'warn');
+    return;
+  }
+
+  // 시군구 목록이 바뀌면 (다른 지역으로 이동) 기존 폴리곤 초기화
+  const sigKey = sigs.sort().join(',');
+  if (sigKey !== currentSig) {
+    buildingSource.clear();
+    currentSig = sigKey;
+  }
+
   setLoading(true, '건물 로딩 중...');
   try {
-    if (!sigCache.has(sig)) {
-      setLoading(true, '데이터 로딩 중...');
+    // 캐시 없는 시군구만 fetch
+    await Promise.all(sigs.map(async sig => {
+      if (sigCache.has(sig)) return;
       const res = await fetch(`/api/buildings?sig=${sig}`);
-      if (!res.ok) throw new Error(`데이터 로드 실패 (${res.status})`);
+      if (!res.ok) return;
       const gj = await res.json();
       for (const f of (gj.features || [])) {
         if (f.properties?.PNU && !f.properties.pnu) f.properties.pnu = f.properties.PNU;
       }
       sigCache.set(sig, gj.features || []);
-    }
+    }));
 
-    const allFeatures = sigCache.get(sig);
+    const allFeatures = sigs.flatMap(sig => sigCache.get(sig) || []);
     const filtered = allFeatures.filter(f => {
       const coords = f.geometry?.coordinates?.flat(3) || [];
       for (let i = 0; i < coords.length - 1; i += 2) {
@@ -418,7 +426,6 @@ async function loadBuildings() {
 
     if (!filtered.length) {
       showToast('이 영역에 건물 없음', 'warn');
-      buildingSource.clear();
       setStatus('건물 0건');
       return;
     }
@@ -427,11 +434,6 @@ async function loadBuildings() {
       { type: 'FeatureCollection', features: filtered },
       { dataProjection: 'EPSG:4326', featureProjection: 'EPSG:3857' }
     );
-    // 시군구 바뀌면 초기화, 같은 시군구면 누적 (중복 PNU 제외)
-    if (sig !== currentSig) {
-      buildingSource.clear();
-      currentSig = sig;
-    }
     const existingPnus = new Set(buildingSource.getFeatures().map(f => f.get('pnu')));
     const toAdd = newFeatures.filter(f => !existingPnus.has(f.get('pnu')));
     buildingSource.addFeatures(toAdd);
