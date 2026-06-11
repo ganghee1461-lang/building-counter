@@ -10,43 +10,21 @@ const CONFIG = {
   INITIAL_ZOOM: 15,
   MIN_LOAD_ZOOM: 15,
   MAX_FEATURES: 500,
-  VWORLD_DOMAIN: 'building-counter.pages.dev',
 };
 
 const state = {
   selectedFeatures: new Map(), // key: PNU
   loading: new Set(),
-  vworldKey: null,
 };
 
-// ===== vworld 키 로드 =====
-async function initVworldKey() {
-  try {
-    const res = await fetch('/api/config');
-    const data = await res.json();
-    state.vworldKey = data.vworldKey;
-    initMap();
-  } catch (err) {
-    showToast('설정 로드 실패: ' + err.message, 'error');
-  }
-}
-
 // ===== 지도 초기화 =====
-function initMap() {
-  const key = state.vworldKey;
-
-  const baseLayer = new ol.layer.Tile({
-    source: new ol.source.XYZ({
-      url: `https://api.vworld.kr/req/wmts/1.0.0/${key}/Base/{z}/{y}/{x}.png`,
-      attributions: '© <a href="https://www.vworld.kr/">VWorld</a>',
-      crossOrigin: 'anonymous',
-    }),
-  });
-
-  window._baseLayer = baseLayer;
-  map.getLayers().insertAt(0, baseLayer);
-  setStatus('지도 로딩 완료. 줌인 후 "이 영역 건물 불러오기" 클릭');
-}
+const baseLayer = new ol.layer.Tile({
+  source: new ol.source.XYZ({
+    url: '/api/wmts?layer=Base&z={z}&y={y}&x={x}',
+    attributions: '© <a href="https://www.vworld.kr/">VWorld</a>',
+    crossOrigin: 'anonymous',
+  }),
+});
 
 const buildingSource = new ol.source.Vector();
 window.buildingSource = buildingSource;
@@ -65,7 +43,7 @@ const buildingLayer = new ol.layer.Vector({
 
 const map = new ol.Map({
   target: 'map',
-  layers: [buildingLayer],
+  layers: [baseLayer, buildingLayer],
   view: new ol.View({
     center: ol.proj.fromLonLat(CONFIG.INITIAL_CENTER),
     zoom: CONFIG.INITIAL_ZOOM,
@@ -364,41 +342,22 @@ function updateSummary() {
   });
 }
 
-// ===== WFS 로딩 (JSONP) =====
-function loadBuildings() {
+// ===== WFS 로딩 =====
+async function loadBuildings() {
   const view = map.getView();
   const zoom = view.getZoom();
   if (zoom < CONFIG.MIN_LOAD_ZOOM) {
     showToast(`줌 ${CONFIG.MIN_LOAD_ZOOM} 이상에서 사용하세요 (현재 ${zoom.toFixed(1)})`, 'warn');
     return;
   }
-  if (!state.vworldKey) {
-    showToast('vworld 키 로드 중입니다. 잠시 후 다시 시도하세요.', 'warn');
-    return;
-  }
-
   const extent = view.calculateExtent(map.getSize());
   const b = ol.proj.transformExtent(extent, 'EPSG:3857', 'EPSG:4326');
   setLoading(true, '건물 로딩 중...');
-
-  const cbName = '_wfsCb_' + Date.now();
-  const timer = setTimeout(() => {
-    cleanup();
-    showToast('건물 조회 시간 초과', 'error');
-    setLoading(false);
-    setStatus('조회 실패');
-  }, 15000);
-
-  function cleanup() {
-    delete window[cbName];
-    const el = document.getElementById(cbName);
-    if (el) el.remove();
-    clearTimeout(timer);
-  }
-
-  window[cbName] = function(gj) {
-    cleanup();
-    setLoading(false);
+  try {
+    const url = `/api/wfs?bbox=${b[1]},${b[0]},${b[3]},${b[2]}&typename=${CONFIG.BUILDING_LAYER}&maxFeatures=${CONFIG.MAX_FEATURES}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`WFS 오류 (${res.status})`);
+    const gj = await res.json();
     if (!gj.features?.length) {
       showToast('이 영역에 건물 없음', 'warn');
       buildingSource.clear();
@@ -412,21 +371,12 @@ function loadBuildings() {
     buildingSource.addFeatures(features);
     setStatus(`건물 ${features.length}건 표시 중`);
     rerenderSelections();
-  };
-
-  const bbox = `${b[1]},${b[0]},${b[3]},${b[2]}`;
-  const src = `https://api.vworld.kr/req/wfs?key=${state.vworldKey}&domain=${CONFIG.VWORLD_DOMAIN}&service=WFS&version=2.0.0&request=GetFeature&typename=${CONFIG.BUILDING_LAYER}&bbox=${bbox}&maxFeatures=${CONFIG.MAX_FEATURES}&output=application/json&srsname=EPSG:4326&FORMAT_OPTIONS=callback:${cbName}`;
-
-  const script = document.createElement('script');
-  script.id  = cbName;
-  script.src = src;
-  script.onerror = () => {
-    cleanup();
-    showToast('건물 조회 실패', 'error');
-    setLoading(false);
+  } catch (err) {
+    showToast(`건물 조회 실패: ${err.message}`, 'error');
     setStatus('조회 실패');
-  };
-  document.head.appendChild(script);
+  } finally {
+    setLoading(false);
+  }
 }
 
 // ===== 상호작용 =====
@@ -537,5 +487,4 @@ function showToast(msg, type = '') {
 function setLoading(on, msg) { document.getElementById('loadIndicator').hidden = !on; if (msg) setStatus(msg); }
 function setStatus(msg) { document.getElementById('statusMsg').textContent = msg; }
 
-setStatus('초기화 중...');
-initVworldKey();
+setStatus('지도 로딩 완료. 줌인 후 "이 영역 건물 불러오기" 클릭');

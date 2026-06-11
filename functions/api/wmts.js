@@ -27,10 +27,13 @@ export async function onRequestGet(context) {
 
   try {
     const res = await fetch(tileUrl, {
+      cf: { httpVersion: '1' },
       headers: {
-        Referer: 'https://building-counter.pages.dev/',
-        Origin:  'https://building-counter.pages.dev',
-        'User-Agent': 'Mozilla/5.0 (compatible; CloudflareWorker)',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36',
+        'Accept': '*/*',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Referer': 'https://building-counter.pages.dev/',
+        'Connection': 'keep-alive',
       },
     });
     if (!res.ok) {
