@@ -104,30 +104,40 @@ function calcMeters(item) {
 }
 
 // ===== 건축HUB API 조회 =====
+const DATA_GO_KR_KEY = '91f8ffe040fc2d65517040949b7e88d6d5a382c577809c94bf144214e891d1d2';
+const BLDG_API_BASE = 'https://apis.data.go.kr/1613000/BldRgstHubService';
+
 async function fetchBuildingInfo(feature) {
   const pnu    = feature.get('pnu');
   const parsed = parsePnu(pnu);
   if (!parsed) return { error: `PNU 파싱 실패: ${pnu}` };
 
   try {
-    let params = new URLSearchParams({ ...parsed, endpoint: 'getBrTitleInfo' });
-    let res    = await fetch(`/api/bldg?${params}`);
-    if (!res.ok) throw new Error(`API 오류 (${res.status})`);
-    let data   = await res.json();
-    let items  = extractItems(data);
-
+    let items = await callBldgApi('getBrTitleInfo', parsed);
     if (items.length === 0) {
-      params = new URLSearchParams({ ...parsed, endpoint: 'getBrRecapTitleInfo' });
-      res    = await fetch(`/api/bldg?${params}`);
-      data   = await res.json();
-      items  = extractItems(data);
+      items = await callBldgApi('getBrRecapTitleInfo', parsed);
       if (items.length === 0) return { error: '건축물대장 미등록' };
     }
-
     return buildResult(items, feature);
   } catch (err) {
     return { error: err.message };
   }
+}
+
+async function callBldgApi(endpoint, parsed) {
+  const params = new URLSearchParams({
+    serviceKey: DATA_GO_KR_KEY,
+    sigunguCd: parsed.sigunguCd,
+    bjdongCd:  parsed.bjdongCd,
+    platGbCd:  parsed.platGbCd,
+    bun:       parsed.bun,
+    ji:        parsed.ji,
+    _type: 'json', numOfRows: '100', pageNo: '1',
+  });
+  const res  = await fetch(`${BLDG_API_BASE}/${endpoint}?${params}`);
+  if (!res.ok) throw new Error(`API 오류 (${res.status})`);
+  const data = await res.json();
+  return extractItems(data);
 }
 
 function extractItems(data) {
