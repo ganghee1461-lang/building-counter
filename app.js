@@ -472,9 +472,21 @@ async function searchAddress() {
   if (!q) return;
   setLoading(true, '주소 검색 중...');
   try {
-    const res  = await fetch(`/api/geocode?address=${encodeURIComponent(q)}`);
-    const data = await res.json();
-    const pt   = data?.response?.result?.point;
+    const VWORLD_KEY = '12B2798C-A916-3C1E-B46E-9D7FC3C0AA45';
+    let pt = null;
+    for (const type of ['ROAD', 'PARCEL']) {
+      const params = new URLSearchParams({
+        service: 'address', request: 'getCoord', version: '2.0',
+        crs: 'EPSG:4326', address: q, refine: 'true', simple: 'false',
+        format: 'json', type, key: VWORLD_KEY,
+      });
+      const res  = await fetch(`https://api.vworld.kr/req/address?${params}`);
+      const data = await res.json();
+      if (data?.response?.status === 'OK') {
+        pt = data.response.result.point;
+        break;
+      }
+    }
     if (!pt) throw new Error('주소를 찾을 수 없습니다');
     map.getView().animate({
       center: ol.proj.fromLonLat([parseFloat(pt.x), parseFloat(pt.y)]),
