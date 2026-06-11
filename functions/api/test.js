@@ -34,6 +34,16 @@ export async function onRequestGet(context) {
     });
   }
 
+  if (target === 'proxy' || target === 'all') {
+    const key = env.VWORLD_KEY || '(no-key)';
+    const vworldUrl = encodeURIComponent(
+      `https://api.vworld.kr/req/wfs?key=${key}` +
+      `&domain=building-counter.pages.dev` +
+      `&service=WFS&version=2.0.0&request=GetCapabilities`
+    );
+    results.corsproxy = await probe(`https://corsproxy.io/?url=${vworldUrl}`);
+  }
+
   return new Response(JSON.stringify(results, null, 2), {
     status: 200,
     headers: {
