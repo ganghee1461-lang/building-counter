@@ -57,10 +57,13 @@ async function probe(url, options = {}) {
   try {
     const res = await fetch(url, { ...options, signal: AbortSignal.timeout(10_000) });
     const body = await res.text();
+    const headers = {};
+    res.headers.forEach((v, k) => { headers[k] = v; });
     return {
       ok:     res.ok,
       status: res.status,
       ms:     Date.now() - start,
+      headers,
       bodyPreview: body.slice(0, 300),
     };
   } catch (err) {
