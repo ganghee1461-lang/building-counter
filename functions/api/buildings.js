@@ -6,7 +6,7 @@
 
 const R2_BASE = 'https://pub-614d984f8d84461fa89f30d93db8d6cf.r2.dev';
 
-const VALID_SIGS = ['43111','43112','43113','43114','43130','43150','43720','43730','43740','43745'];
+const VALID_SIGS = ['43111','43112','43113','43114','43130','43150','43720','43730','43740','43745','43750','43760','43770','43800'];
 
 export async function onRequestGet(context) {
   const url = new URL(context.request.url);
