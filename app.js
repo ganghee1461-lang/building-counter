@@ -20,7 +20,7 @@ const state = {
 // ===== 지도 초기화 =====
 const baseLayer = new ol.layer.Tile({
   source: new ol.source.XYZ({
-    url: 'https://api.vworld.kr/req/wmts/1.0.0/B1583C8F-3511-30DD-BAD0-C5278FF4351E/Base/{z}/{y}/{x}.png',
+    url: '/api/wmts?layer=Base&z={z}&y={y}&x={x}',
     attributions: '© <a href="https://www.vworld.kr/">VWorld</a>',
     crossOrigin: 'anonymous',
   }),
