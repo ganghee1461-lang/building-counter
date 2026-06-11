@@ -352,7 +352,27 @@ function updateSummary() {
 }
 
 // ===== 건물 데이터 캐시 =====
-const sigCache = new Map(); // sig → features[]
+const sigCache = new Map();
+
+// 시군구 경계 [minLng, minLat, maxLng, maxLat]
+const SIG_BOUNDS = {
+  '43111': [127.40, 36.55, 127.65, 36.80], '43112': [127.35, 36.50, 127.60, 36.75],
+  '43113': [127.35, 36.55, 127.65, 36.85], '43114': [127.45, 36.65, 127.75, 37.00],
+  '43130': [127.60, 36.85, 128.10, 37.20], '43150': [128.05, 36.95, 128.55, 37.25],
+  '43720': [127.55, 36.25, 127.95, 36.65], '43730': [127.40, 36.15, 127.80, 36.55],
+  '43740': [127.45, 35.95, 127.90, 36.35], '43745': [127.55, 36.75, 127.75, 36.95],
+  '43750': [127.30, 36.75, 127.65, 37.00], '43760': [127.65, 36.65, 128.00, 37.00],
+  '43770': [127.45, 36.85, 127.80, 37.10], '43800': [128.15, 36.80, 128.60, 37.10],
+};
+
+function getSigFromCenter() {
+  const center = ol.proj.toLonLat(map.getView().getCenter());
+  const [lng, lat] = center;
+  for (const [sig, [minLng, minLat, maxLng, maxLat]] of Object.entries(SIG_BOUNDS)) {
+    if (lng >= minLng && lng <= maxLng && lat >= minLat && lat <= maxLat) return sig;
+  }
+  return null;
+}
 
 // ===== 건물 로딩 =====
 async function loadBuildings() {
@@ -363,29 +383,25 @@ async function loadBuildings() {
     return;
   }
 
-  const sig = document.getElementById('sigSelect').value;
+  const sig = getSigFromCenter();
   if (!sig) {
-    showToast('시군구를 먼저 선택하세요', 'warn');
+    showToast('충청북도 범위를 벗어났습니다', 'warn');
     return;
   }
 
   const extent = view.calculateExtent(map.getSize());
   const b = ol.proj.transformExtent(extent, 'EPSG:3857', 'EPSG:4326');
-  // b: [minLng, minLat, maxLng, maxLat]
   const [minLng, minLat, maxLng, maxLat] = b;
 
   setLoading(true, '건물 로딩 중...');
   try {
     if (!sigCache.has(sig)) {
-      setLoading(true, `${sig} 데이터 로딩 중...`);
+      setLoading(true, '데이터 로딩 중...');
       const res = await fetch(`/api/buildings?sig=${sig}`);
       if (!res.ok) throw new Error(`데이터 로드 실패 (${res.status})`);
       const gj = await res.json();
-      // PNU 소문자 정규화
       for (const f of (gj.features || [])) {
-        if (f.properties?.PNU && !f.properties.pnu) {
-          f.properties.pnu = f.properties.PNU;
-        }
+        if (f.properties?.PNU && !f.properties.pnu) f.properties.pnu = f.properties.PNU;
       }
       sigCache.set(sig, gj.features || []);
     }
@@ -394,8 +410,7 @@ async function loadBuildings() {
     const filtered = allFeatures.filter(f => {
       const coords = f.geometry?.coordinates?.flat(3) || [];
       for (let i = 0; i < coords.length - 1; i += 2) {
-        const lng = coords[i], lat = coords[i + 1];
-        if (lng >= minLng && lng <= maxLng && lat >= minLat && lat <= maxLat) return true;
+        if (coords[i] >= minLng && coords[i] <= maxLng && coords[i+1] >= minLat && coords[i+1] <= maxLat) return true;
       }
       return false;
     });
@@ -407,13 +422,15 @@ async function loadBuildings() {
       return;
     }
 
-    const gj = { type: 'FeatureCollection', features: filtered };
-    buildingSource.clear();
-    const features = new ol.format.GeoJSON().readFeatures(gj, {
-      dataProjection: 'EPSG:4326', featureProjection: 'EPSG:3857',
-    });
-    buildingSource.addFeatures(features);
-    setStatus(`건물 ${features.length}건 표시 중`);
+    const newFeatures = new ol.format.GeoJSON().readFeatures(
+      { type: 'FeatureCollection', features: filtered },
+      { dataProjection: 'EPSG:4326', featureProjection: 'EPSG:3857' }
+    );
+    // 기존 피처 유지, 중복(같은 pnu) 제외하고 추가
+    const existingPnus = new Set(buildingSource.getFeatures().map(f => f.get('pnu')));
+    const toAdd = newFeatures.filter(f => !existingPnus.has(f.get('pnu')));
+    buildingSource.addFeatures(toAdd);
+    setStatus(`건물 ${buildingSource.getFeatures().length}건 표시 중`);
     rerenderSelections();
   } catch (err) {
     showToast(`건물 조회 실패: ${err.message}`, 'error');
@@ -470,51 +487,72 @@ map.on('pointermove', evt => {
   }
 });
 
-// ===== 시군구 중심 좌표 =====
-const SIG_CENTER = {
-  '43111': [127.524, 36.642], '43112': [127.458, 36.609],
-  '43113': [127.439, 36.657], '43114': [127.570, 36.782],
-  '43130': [127.926, 37.002], '43150': [128.209, 37.132],
-  '43720': [127.729, 36.489], '43730': [127.573, 36.306],
-  '43740': [127.776, 36.175], '43745': [127.584, 36.786],
-  '43750': [127.432, 36.855], '43760': [127.786, 36.814],
-  '43770': [127.690, 36.993], '43800': [128.366, 36.985],
-};
-
 // ===== UI 이벤트 =====
 document.getElementById('clearBtn').onclick  = clearSelection;
 document.getElementById('reloadBtn').onclick = loadBuildings;
 document.getElementById('exportBtn').onclick = exportCSV;
 document.getElementById('searchBtn').onclick = searchAddress;
 document.getElementById('searchInput').onkeydown = e => { if (e.key === 'Enter') searchAddress(); };
-document.getElementById('sigSelect').onchange = () => {
-  const sig = document.getElementById('sigSelect').value;
-  if (!sig || !SIG_CENTER[sig]) return;
-  map.getView().animate({ center: ol.proj.fromLonLat(SIG_CENTER[sig]), zoom: 13, duration: 600 });
-};
+
+// 검색창 외부 클릭 시 결과 닫기
+document.addEventListener('click', e => {
+  if (!e.target.closest('.search-wrap')) hideSearchResults();
+});
+
+function showSearchResults(results) {
+  const el = document.getElementById('searchResults');
+  el.innerHTML = '';
+  if (!results.length) {
+    el.innerHTML = '<div class="result-empty">검색 결과 없음</div>';
+  } else {
+    results.forEach(r => {
+      const item = document.createElement('div');
+      item.className = 'result-item';
+      item.innerHTML = `<div class="result-name">${r.display_name.split(',')[0]}</div><div class="result-addr">${r.display_name}</div>`;
+      item.onclick = () => {
+        map.getView().animate({
+          center: ol.proj.fromLonLat([parseFloat(r.lon), parseFloat(r.lat)]),
+          zoom: 17, duration: 600,
+        });
+        document.getElementById('searchInput').value = r.display_name.split(',')[0];
+        hideSearchResults();
+        setTimeout(loadBuildings, 700);
+      };
+      el.appendChild(item);
+    });
+  }
+  el.classList.add('show');
+}
+
+function hideSearchResults() {
+  document.getElementById('searchResults').classList.remove('show');
+}
 
 async function searchAddress() {
   const q = document.getElementById('searchInput').value.trim();
   if (!q) return;
   setLoading(true, '주소 검색 중...');
   try {
-    // Nominatim (OSM) - 충북 범위 한정, 한국 우선
+    const query = (q.includes('충북') || q.includes('충청북도')) ? q : `충청북도 ${q}`;
     const params = new URLSearchParams({
-      q: q.includes('충북') || q.includes('충청북도') ? q : `충청북도 ${q}`,
-      format: 'json', limit: '1', countrycodes: 'kr',
+      q: query, format: 'json', limit: '5', countrycodes: 'kr',
       accept_language: 'ko',
+      viewbox: '127.3,37.3,128.6,36.0', bounded: '1',
     });
-    const res = await fetch(`https://nominatim.openstreetmap.org/search?${params}`, {
+    const res  = await fetch(`https://nominatim.openstreetmap.org/search?${params}`, {
       headers: { 'User-Agent': 'building-counter/1.0' },
     });
     const data = await res.json();
-    if (!data?.length) throw new Error('주소를 찾을 수 없습니다');
-    const { lon, lat } = data[0];
-    map.getView().animate({
-      center: ol.proj.fromLonLat([parseFloat(lon), parseFloat(lat)]),
-      zoom: 17, duration: 600,
-    });
-    setTimeout(loadBuildings, 700);
+    if (!data?.length) { showToast('주소를 찾을 수 없습니다', 'warn'); return; }
+    if (data.length === 1) {
+      map.getView().animate({
+        center: ol.proj.fromLonLat([parseFloat(data[0].lon), parseFloat(data[0].lat)]),
+        zoom: 17, duration: 600,
+      });
+      setTimeout(loadBuildings, 700);
+    } else {
+      showSearchResults(data);
+    }
   } catch (err) { showToast(err.message, 'error'); }
   finally { setLoading(false); }
 }
