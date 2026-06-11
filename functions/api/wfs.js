@@ -19,17 +19,27 @@ export async function onRequestGet(context) {
   const vworldUrl = `https://api.vworld.kr/req/wfs?key=${VWORLD_KEY}&domain=building-counter.pages.dev&service=WFS&version=2.0.0&request=GetFeature&typename=${typename}&bbox=${bbox}&maxFeatures=${maxFeatures}&output=application/json&srsname=EPSG:4326`;
 
   try {
-    const res = await fetch(vworldUrl);
+    const res = await fetch(vworldUrl, {
+      headers: {
+        Referer: 'https://building-counter.pages.dev/',
+        Origin:  'https://building-counter.pages.dev',
+        'User-Agent': 'Mozilla/5.0 (compatible; CloudflareWorker)',
+      },
+    });
     const text = await res.text();
 
     let data;
     try {
       data = JSON.parse(text);
     } catch (e) {
-      return new Response(text, {
+      return new Response(JSON.stringify({
+        error: 'WFS 응답 파싱 실패',
+        httpStatus: res.status,
+        preview: text.slice(0, 500),
+      }), {
         status: 502,
         headers: {
-          'Content-Type': 'text/plain; charset=utf-8',
+          'Content-Type': 'application/json; charset=utf-8',
           'Access-Control-Allow-Origin': '*',
         },
       });

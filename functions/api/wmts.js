@@ -26,7 +26,13 @@ export async function onRequestGet(context) {
   const tileUrl = `https://api.vworld.kr/req/wmts/1.0.0/${VWORLD_KEY}/${layer}/${z}/${y}/${x}.png`;
 
   try {
-    const res = await fetch(tileUrl);
+    const res = await fetch(tileUrl, {
+      headers: {
+        Referer: 'https://building-counter.pages.dev/',
+        Origin:  'https://building-counter.pages.dev',
+        'User-Agent': 'Mozilla/5.0 (compatible; CloudflareWorker)',
+      },
+    });
     if (!res.ok) {
       return new Response(`타일 요청 실패 (${res.status})`, { status: res.status });
     }
