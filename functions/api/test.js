@@ -36,12 +36,11 @@ export async function onRequestGet(context) {
 
   if (target === 'proxy' || target === 'all') {
     const key = env.VWORLD_KEY || '(no-key)';
-    const vworldUrl = encodeURIComponent(
-      `https://api.vworld.kr/req/wfs?key=${key}` +
-      `&domain=building-counter.pages.dev` +
-      `&service=WFS&version=2.0.0&request=GetCapabilities`
-    );
-    results.corsproxy = await probe(`https://corsproxy.io/?url=${vworldUrl}`);
+    const vworldPath = `api.vworld.kr/req/wfs?key=${key}&domain=building-counter.pages.dev&service=WFS&version=2.0.0&request=GetCapabilities`;
+    // allorigins: 서버사이드 요청 허용하는 공개 프록시
+    results.allorigins = await probe(`https://api.allorigins.win/raw?url=${encodeURIComponent('https://' + vworldPath)}`);
+    // thingproxy
+    results.thingproxy = await probe(`https://thingproxy.freeboard.io/fetch/https://${vworldPath}`);
   }
 
   return new Response(JSON.stringify(results, null, 2), {
