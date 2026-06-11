@@ -354,7 +354,7 @@ async function loadBuildings() {
   const b = ol.proj.transformExtent(extent, 'EPSG:3857', 'EPSG:4326');
   setLoading(true, '건물 로딩 중...');
   try {
-    const url = `/api/wfs?bbox=${b[1]},${b[0]},${b[3]},${b[2]}&typename=${CONFIG.BUILDING_LAYER}&maxFeatures=${CONFIG.MAX_FEATURES}`;
+    const url = `/api/buildings?bbox=${b[1]},${b[0]},${b[3]},${b[2]}`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`WFS 오류 (${res.status})`);
     const gj = await res.json();
