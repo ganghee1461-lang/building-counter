@@ -353,6 +353,7 @@ function updateSummary() {
 
 // ===== 건물 데이터 캐시 =====
 const sigCache = new Map();
+let currentSig = null;
 
 // 시군구 경계 [minLng, minLat, maxLng, maxLat]
 const SIG_BOUNDS = {
@@ -426,7 +427,11 @@ async function loadBuildings() {
       { type: 'FeatureCollection', features: filtered },
       { dataProjection: 'EPSG:4326', featureProjection: 'EPSG:3857' }
     );
-    // 기존 피처 유지, 중복(같은 pnu) 제외하고 추가
+    // 시군구 바뀌면 초기화, 같은 시군구면 누적 (중복 PNU 제외)
+    if (sig !== currentSig) {
+      buildingSource.clear();
+      currentSig = sig;
+    }
     const existingPnus = new Set(buildingSource.getFeatures().map(f => f.get('pnu')));
     const toAdd = newFeatures.filter(f => !existingPnus.has(f.get('pnu')));
     buildingSource.addFeatures(toAdd);
